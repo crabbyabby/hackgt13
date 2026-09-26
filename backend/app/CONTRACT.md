@@ -1,7 +1,12 @@
 # The converter contract
 
 ```python
-def convert_pages(page_images: list[str]) -> dict:
+def convert_pages(
+    page_images: list[str],
+    *,
+    provider: str = "development",
+    model: str = "development-fixture",
+) -> dict:
     ...
 ```
 

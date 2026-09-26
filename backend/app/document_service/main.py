@@ -1,11 +1,12 @@
 """Local hackathon backend. Run one Uvicorn worker; converter is injectable."""
 import os
-from pathlib import Path
 import shutil
-from contextlib import asynccontextmanager
 import uuid
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Annotated
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, UploadFile
+from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
@@ -20,6 +21,7 @@ MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 def create_app(data_dir=None, converter=None):
     root = Path(data_dir or os.environ.get('EIGENSCRIBE_DATA_DIR', 'data')).resolve()
     convert = converter or convert_pages
+    uses_shared_ai_converter = converter is None
 
     @asynccontextmanager
     async def lifespan(app):
@@ -58,7 +60,14 @@ def create_app(data_dir=None, converter=None):
             source = directory(doc_id) / ('original.' + doc['sourceType'])
             images = prepare_pages(source, doc['sourceType'])
             stage = 'conversion'
-            result = convert(images)  # THE BLACK BOX: this is the only call into Person 1.
+            if uses_shared_ai_converter:
+                result = convert(
+                    images,
+                    provider=doc.get('aiProvider', 'development'),
+                    model=doc.get('aiModel', 'development-fixture'),
+                )
+            else:
+                result = convert(images)
             stage = 'converter output validation'
             draft = ExtractedDocument.model_validate(result)
             if any(b.page > len(images) for b in draft.blocks):
@@ -72,7 +81,7 @@ def create_app(data_dir=None, converter=None):
                     status='needs_review', error=None,
                 )
             store().update(doc_id, done)
-        except Exception:
+        except Exception:  # noqa: BLE001 - job boundary converts failures to a safe status
             # Never publish provider exception text: it may contain keys or private inputs.
             message = {'page preparation': 'Could not read this file. Use a valid PNG/JPEG or an unencrypted PDF of 1–3 pages.',
                        'conversion': 'Converter failed. Check the converter setup and retry.',
@@ -86,7 +95,12 @@ def create_app(data_dir=None, converter=None):
         return {'status': 'ok'}
 
     @app.post('/documents', status_code=202)
-    async def upload(file: UploadFile, background_tasks: BackgroundTasks):
+    async def upload(
+        background_tasks: BackgroundTasks,
+        file: Annotated[UploadFile, File()],
+        provider: Annotated[str, Form()] = 'development',
+        model: Annotated[str, Form()] = 'development-fixture',
+    ):
         doc_id = 'doc-' + uuid.uuid4().hex
         folder = root / 'files' / doc_id
         folder.mkdir(parents=True)
@@ -110,9 +124,22 @@ def create_app(data_dir=None, converter=None):
             else:
                 raise HTTPException(415, 'Upload a PDF, PNG, or JPEG file.')
             pending.rename(folder / f'original.{kind}')
-            doc = dict(id=doc_id, title='Processing document', status='processing', revision=1,
-                       pages=[], blocks=[], error=None, sourceType=kind,
-                       sourceUrl=f'/documents/{doc_id}/source', createdAt=now(), updatedAt=now())
+            doc = {
+                'id': doc_id,
+                'title': 'Processing document',
+                'status': 'processing',
+                'revision': 1,
+                'pages': [],
+                'blocks': [],
+                'error': None,
+                'sourceType': kind,
+                'fileName': file.filename or f'notes.{kind}',
+                'aiProvider': provider,
+                'aiModel': model,
+                'sourceUrl': f'/documents/{doc_id}/source',
+                'createdAt': now(),
+                'updatedAt': now(),
+            }
             store().create(doc)
         except Exception:
             shutil.rmtree(folder, ignore_errors=True)
@@ -129,6 +156,56 @@ def create_app(data_dir=None, converter=None):
     @app.get('/documents/{doc_id}')
     def get_document(doc_id: str):
         return store().get(doc_id)
+
+    @app.get('/documents/{doc_id}/semantic-note')
+    def semantic_note(doc_id: str):
+        doc = store().get(doc_id)
+        if doc['status'] not in ('needs_review', 'ready'):
+            raise Conflict('The document is not ready for review.')
+
+        blocks = []
+        for block in doc['blocks']:
+            kind = block['type']
+            semantic = {
+                'id': block['id'],
+                'kind': kind,
+                'text': block['text'] or block['description'] or block['spokenText'],
+                'confidence': block.get('confidence', 0),
+                'needsReview': block['needsReview'],
+                'interpretations': block.get('interpretations', []),
+            }
+            if kind == 'equation':
+                semantic['math'] = {
+                    'latex': block['latex'],
+                    'spoken': block['spokenText'],
+                    'label': 'Handwritten equation',
+                    'variables': [],
+                }
+            elif kind == 'diagram':
+                semantic['altText'] = block['description']
+            blocks.append(semantic)
+
+        slug = ''.join(character if character.isalnum() else '-' for character in doc['title'].lower())
+        slug = '-'.join(filter(None, slug.split('-'))) or doc_id
+        return {
+            'id': doc_id,
+            'slug': slug,
+            'title': doc['title'],
+            'source': {
+                'name': doc.get('fileName', f"{doc_id}.{doc['sourceType']}"),
+                'kind': 'pdf' if doc['sourceType'] == 'pdf' else 'image',
+                'pageCount': len(doc['pages']),
+                'aiProvider': doc.get('aiProvider'),
+                'aiModel': doc.get('aiModel'),
+                'documentId': doc_id,
+                'revision': doc['revision'],
+            },
+            'blocks': blocks,
+            'status': 'published' if doc['status'] == 'ready' else 'draft',
+            'createdAt': doc['createdAt'],
+            'updatedAt': doc['updatedAt'],
+            'schemaVersion': 1,
+        }
 
     @app.get('/documents/{doc_id}/source')
     def source(doc_id: str):

@@ -1,5 +1,14 @@
 from typing import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class Interpretation(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    reading: str = Field(min_length=1, max_length=30000)
+    latex: str = Field(default='', max_length=30000)
+    confidence: float = Field(ge=0, le=1)
+    evidence: str = Field(default='', max_length=3000)
 
 
 class Block(BaseModel):
@@ -13,6 +22,8 @@ class Block(BaseModel):
     spokenText: str = Field(min_length=1, max_length=30000)
     needsReview: bool
     reviewReason: str = Field(default='', max_length=3000)
+    confidence: float = Field(default=0, ge=0, le=1)
+    interpretations: list[Interpretation] = Field(default_factory=list, max_length=20)
 
     @model_validator(mode='after')
     def check_content(self):

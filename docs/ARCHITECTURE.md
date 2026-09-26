@@ -30,6 +30,7 @@ SemanticNote draft ──► human review ──► immutable publication revisi
 
 ```text
 backend/app/
+  document_service/       durable uploads, page rendering, SQLite, revisions
   api/routes/             FastAPI transport only
   document_processing/    loss-aware PDF/handwriting transcription
   domain/                 Pydantic models and pipeline data
@@ -52,7 +53,7 @@ Dependencies point inward: FastAPI routes depend on Python services, services de
 
 `SemanticNote` contains ordered `NoteBlock` objects. A block can be a heading, paragraph, equation, graph, diagram, or annotation. Blocks carry confidence and `needsReview`; math blocks can carry LaTeX, spoken math, labels, and variable meanings; visual blocks can carry alt text and source-page coordinates.
 
-The current type is intentionally compact. Before persistence, add:
+The current type is intentionally compact. Before production deployment, add:
 
 - document and block schema versions;
 - immutable publication revisions;
@@ -63,9 +64,11 @@ The current type is intentionally compact. Before persistence, add:
 
 ## Backend services
 
-### ExtractionService
+### DocumentService
 
-Owns upload validation and extraction orchestration. Today it invokes a provider synchronously. The production version should enqueue a job and let a worker execute bounded stages with progress events.
+Mackenzie's document service owns signature validation, original-file storage, normalized page images,
+SQLite records, background conversion, retry, optimistic revisions, and finalization. The browser upload
+path uses this service. Its converter packages normalized pages for the selected shared AI adapter.
 
 Proposed production stages:
 
@@ -86,7 +89,8 @@ Creates a short-lived browser voice session. The model must call reader tools ra
 
 ### Repositories
 
-The development store is in-memory and intentionally disposable. Production should use:
+Uploaded documents and review revisions persist in local SQLite, while source files and normalized pages
+persist under `data/`. The older `/v1` compatibility routes still use an in-memory repository. Production should use:
 
 - object storage for original uploads, rendered page images, and generated downloads;
 - a relational database for documents, jobs, blocks, review revisions, and publications;
@@ -98,6 +102,11 @@ The development store is in-memory and intentionally disposable. Production shou
 | Route | Purpose | Current state |
 | --- | --- | --- |
 | `POST /api/extract` | TypeScript browser proxy to FastAPI | Working |
+| `POST /documents` | Persist source and start background conversion | Canonical upload path |
+| `GET /documents/:id` | Poll persisted document status | Working |
+| `GET /documents/:id/semantic-note` | Compile the persisted review document for the browser | Working |
+| `PATCH /documents/:id` | Revision-safe reviewer edits | Working |
+| `POST /documents/:id/finalize` | Finalize after review flags are resolved | Working |
 | `POST /v1/extraction-jobs` | Create and currently execute an extraction job | Python development pipeline works |
 | `GET /v1/extraction-jobs/:id` | Read extraction progress | Python in-memory repository |
 | `GET /v1/pdf-processing/models` | List provider/model choices and API-key availability | Working |
@@ -111,7 +120,7 @@ The development store is in-memory and intentionally disposable. Production shou
 
 ### Extraction
 
-- Connect the loss-aware PDF transcription result to the semantic extraction agents.
+- Add calibrated provider comparison evaluations for handwritten math.
 - Add specialized fallbacks for low-confidence handwriting and math OCR.
 - Rasterize PDFs deterministically and retain source coordinates.
 - Add graph/diagram analysis with object-level descriptions.
@@ -119,7 +128,7 @@ The development store is in-memory and intentionally disposable. Production shou
 
 ### Jobs and storage
 
-- Add durable object storage and relational migrations.
+- Replace local filesystem/SQLite storage with production object storage and relational migrations.
 - Change upload to direct-to-object-storage for large files.
 - Add queue workers, retry policy, idempotency keys, cancellation, and progress events.
 - Add ownership, authorization, retention, export, and deletion policies.

@@ -2,7 +2,9 @@
 
 EigenScribe turns handwritten or static math notes into a reviewed semantic document, then publishes that document as an accessible interactive reader.
 
-This branch is an architecture-first rebuild. External AI, durable storage, background jobs, and realtime voice calls are represented by explicit adapters and TODOs. The default development adapter returns a deterministic fixture so the entire workflow remains runnable.
+The merged architecture uses Mackenzie's durable document service for uploads, page preparation,
+SQLite persistence, background processing, review revisions, retry, and finalization. Its converter
+boundary calls the selectable OpenAI, Gemini, Grok, or deterministic development transcription adapter.
 
 ## Run locally
 
@@ -41,7 +43,9 @@ Open <http://localhost:5173>. FastAPI documentation is available at <http://loca
 
 ## Architecture
 
-The Python backend owns the canonical `SemanticNote`, extraction pipeline, AI/document-processing boundaries, repositories, publication service, and future voice session creation. TypeScript is limited to the browser UI, browser speech fallback, and a thin `/api/extract` proxy.
+The Python backend owns source validation, normalized page images, SQLite persistence, the extraction
+pipeline, AI/document-processing boundaries, revisions, publication, and future voice sessions.
+TypeScript is limited to the browser UI, polling transport, browser speech fallback, and thin API proxies.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, data flow, API routes, and the integration backlog.
 
@@ -52,7 +56,8 @@ for the local pipeline agents. The uploader automatically enables model choices 
 provider: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Google Gemini, and `XAI_API_KEY` for Grok.
 Choices without a configured key remain visible but disabled.
 
-The PDF transcription API is separate from semantic formatting:
+The uploader uses the persisted `/documents` workflow. The lower-level transcription API remains
+available for testing providers directly:
 
 ```bash
 curl http://127.0.0.1:8000/v1/pdf-processing/models

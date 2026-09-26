@@ -26,7 +26,7 @@ export type SemanticNote = {
   slug: string;
   title: string;
   course?: string;
-  source: { name: string; kind: SourceKind; pageCount: number; aiProvider?: string; aiModel?: string };
+  source: { name: string; kind: SourceKind; pageCount: number; aiProvider?: string; aiModel?: string; documentId?: string; revision?: number };
   blocks: NoteBlock[];
   status: "draft" | "published";
   createdAt: string;

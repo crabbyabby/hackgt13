@@ -1,7 +1,8 @@
 # EigenScribe — Person 2 backend
 
-A local hackathon backend with one replaceable converter function. No API key is
-needed: the included converter returns clearly labeled mock text, not a transcription.
+A local hackathon backend with one replaceable converter boundary. The merged
+converter calls EigenScribe's selectable OpenAI, Gemini, Grok, or development
+PDF transcription service.
 
 ## Start on Windows (PowerShell)
 Extract the ZIP, open this folder in VS Code, then open a terminal here:
@@ -9,7 +10,7 @@ Extract the ZIP, open this folder in VS Code, then open a terminal here:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload
+.\.venv\Scripts\python.exe -m uvicorn backend.app.main:app --reload
 ```
 
 No environment activation or PowerShell execution-policy changes are required.
@@ -22,7 +23,7 @@ macOS/Linux:
 ```bash
 python3 -m venv .venv
 .venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn app.main:app --reload
+.venv/bin/python -m uvicorn backend.app.main:app --reload
 ```
 
 ## Your first five minutes
@@ -31,28 +32,23 @@ python3 -m venv .venv
 3. Copy the returned id. A 202 response means accepted, not converted yet.
 4. Run GET /documents/{doc_id} with that ID. Poll until status changes from
    processing to needs_review or failed.
-5. A successful result contains mock blocks plus URLs for the original and page images.
+5. A successful result contains reviewable blocks plus URLs for the original and page images.
 6. Stop/restart the server and retrieve the same ID: documents persist.
 
 ## Project map
-- app/main.py: routes, job orchestration, edits, and review lifecycle.
-- app/converter.py: THE BLACK BOX integration point; replace only convert_pages.
-- app/models.py: shared JSON validation and edit requests.
-- app/pages.py: PDF rendering / image normalization.
-- app/storage.py: SQLite persistence and revision-safe updates.
+- document_service/main.py: routes, job orchestration, edits, and review lifecycle.
+- document_service/converter.py: adapter into the shared AI transcription service.
+- document_service/models.py: shared JSON validation and edit requests.
+- document_service/pages.py: PDF rendering / image normalization.
+- document_service/storage.py: SQLite persistence and revision-safe updates.
 - CONTRACT.md: handoff agreement for your friend and frontend teammates.
-- tests/test_api.py: integration tests, with no external API calls.
+- backend/tests/test_document_service.py: persisted workflow integration test, with no external API calls.
 - data/: generated at runtime, excluded from Git and this ZIP.
 
-## Connect your friend's converter
-Replace the mock body in app/converter.py, or import her function there:
-
-```python
-from .person1.convert import convert_pages
-```
-
-Put her module and any supporting files in the matching folder; install her
-requirements separately. The backend calls it exactly once per processing attempt:
+## Converter integration
+The merged converter accepts normalized page images and packages them as a PDF
+for the selected provider. An injected one-argument converter is still supported
+by `create_app` for tests or alternative implementations.
 
 ```python
 result = convert_pages(page_images)
@@ -63,8 +59,8 @@ with title and blocks (see CONTRACT.md). Additional top-level fields in her
 existing document envelope are ignored: backend owns document identity and status.
 Do not rename her function or add HTTP code inside it. Backend invocation runs
 in a background thread. A converter exception or invalid result becomes failed.
-If her code calls an AI provider, set that provider's key in the server terminal.
-No AI key or SDK is needed for the mock. A .env file is not auto-loaded.
+Configure `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `XAI_API_KEY` in `.env.local`.
+The development fixture needs no key.
 
 ## API
 | Method | Path | Purpose |
@@ -111,13 +107,11 @@ the review interface. HTML export remains Person 4's responsibility.
 ## Test
 
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m pytest
 ```
 
-Nine integration tests cover image uploads, PDF page order, stored edits,
-revision conflicts, finalize/reopen, input limits, failure/retry, invalid converter
-output, persistence, restart recovery, and stale narration checks. A test-client
-deprecation warning may appear from Starlette; the tested HTTPX interface works.
+The combined test suite covers the persisted upload/conversion path, semantic
+compilation, ambiguity preservation, the provider catalog, and the legacy pipeline.
 TestClient waits for background work; a real browser receives 202 before completion.
 
 ## Scope and limits
