@@ -51,7 +51,7 @@ poll reads as well. `MODEL_PROGRESS_INTERVAL_SECONDS` controls the heartbeat.
 
 The Python backend owns source validation, normalized page images, SQLite persistence, the extraction
 pipeline, AI/document-processing boundaries, revisions, publication, narration preparation, and secure
-voice-provider credentials. TypeScript is limited to the browser UI, polling transport, ElevenLabs'
+voice-provider credentials. TypeScript is limited to the browser UI, polling transport, the Grok
 real-time browser session, audio playback, and thin API proxies.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, data flow, API routes, and the integration backlog.
@@ -63,28 +63,27 @@ for the local pipeline agents. The uploader automatically enables model choices 
 provider: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Google Gemini, and `XAI_API_KEY` for Grok.
 Choices without a configured key remain visible but disabled.
 
-Voice features use ElevenLabs while math narration preparation uses a text LLM.
+Voice features use Grok while math narration preparation uses a text LLM.
+Grok speech, transcription, and the live conversation all use `XAI_API_KEY`.
 Add these values to `.env.local`, then restart both servers:
 
 ```bash
-ELEVENLABS_API_KEY=your_key
-ELEVENLABS_AGENT_ID=your_agent_id
-ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
-ELEVENLABS_TTS_MODEL=eleven_v3
-ELEVENLABS_STT_MODEL=scribe_v2
+XAI_API_KEY=your_key
+GROK_VOICE_ID=eve
+GROK_VOICE_MODEL=grok-voice-latest
+GROK_VOICE_LANGUAGE=en
 NARRATION_MODEL=gpt-6-luna
 ```
 
-The full-note and click-to-read modes use ElevenLabs when `ELEVENLABS_API_KEY`
+The full-note and click-to-read modes use Grok text-to-speech when `XAI_API_KEY`
 is configured. Set `OPENAI_API_KEY` as well to have the narration LLM rewrite raw notation into an
 explicit spoken script; otherwise the reviewed spoken-math fields are used as a
-deterministic fallback. If ElevenLabs is unconfigured or its TTS request fails,
+deterministic fallback. If Grok is unconfigured or its speech request fails,
 the reader automatically speaks the same math-aware script with the browser's
 default `speechSynthesis` voice. This makes click-to-read formula testing work in
-development mode without an ElevenLabs account. Real-time conversation additionally requires an
-ElevenLabs Agent with prompt overrides enabled and its ID in
-`ELEVENLABS_AGENT_ID`. The Python API creates the signed connection URL so the
-ElevenLabs key is never sent to the browser.
+development mode without an xAI key. Real-time conversation uses the same key:
+the Python API mints a short-lived Grok client secret, and the browser opens
+`wss://api.x.ai/v1/realtime` with that secret so the API key never reaches the browser.
 
 The uploader uses the persisted `/documents` workflow. The lower-level transcription API remains
 available for testing providers directly:

@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { AudioLines, Download, Headphones, Mic, Minimize2, PhoneOff, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
+import { useGrokConversation } from "@/lib/voice/grok-realtime";
 
 export type FormulaReadRequest = { index: number; token: number } | null;
 
@@ -43,10 +43,10 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
   const browserSpeechRunRef = useRef(0);
   const browserPauseRef = useRef<number | null>(null);
   const context = useMemo(() => documentContext(note), [note]);
-  const conversation = useConversation({
-    onConnect: () => { setAgentStarting(false); setMessage("Voice conversation connected."); },
+  const conversation = useGrokConversation({
+    onConnect: () => { setAgentStarting(false); setMessage("Grok voice connected."); },
     onDisconnect: () => { setAgentStarting(false); setMessage("Voice conversation ended."); },
-    onError: (error) => { setAgentStarting(false); setMessage(`Voice agent error: ${String(error)}`); },
+    onError: (error) => { setAgentStarting(false); setMessage(`Grok voice error: ${error}`); },
   });
 
   useEffect(() => () => {
@@ -80,7 +80,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
 
   function speakWithBrowser(script: string, mode: "full" | "formula") {
     if (!("speechSynthesis" in window)) {
-      throw new Error("Neither ElevenLabs nor browser speech is available.");
+      throw new Error("Neither Grok voice nor browser speech is available.");
     }
     const chunks = browserSpeechChunks(script);
     if (!chunks.length) throw new Error("The narration script is empty.");
@@ -109,7 +109,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     };
 
     setSpeaking(true);
-    setMessage("ElevenLabs is unavailable — using the default browser voice.");
+    setMessage("Grok voice is unavailable — using the default browser voice.");
     speakNext();
   }
 
@@ -128,7 +128,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
       if (!scriptResponse.ok || !scriptPayload.script) {
         throw new Error(scriptPayload.error ?? "Narration script generation failed.");
       }
-      setMessage("Generating ElevenLabs MP3…");
+      setMessage("Generating Grok voice…");
       let fallbackStarted = false;
       const runBrowserFallback = () => {
         if (fallbackStarted) return;
@@ -142,7 +142,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ text: scriptPayload.script }),
         });
-        if (!speechResponse.ok) throw new Error("ElevenLabs is unavailable.");
+        if (!speechResponse.ok) throw new Error("Grok voice is unavailable.");
         const audioUrl = URL.createObjectURL(await speechResponse.blob());
         audioUrlRef.current = audioUrl;
         const audio = new Audio(audioUrl);
@@ -172,21 +172,15 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     setMessage("Connecting the note-aware voice agent…");
     try {
       const response = await fetch("/api/voice/agent", { cache: "no-store" });
-      const payload = await response.json() as { signedUrl?: string; error?: string };
-      if (!response.ok || !payload.signedUrl) {
-        throw new Error(payload.error ?? "Voice agent is not configured.");
+      const payload = await response.json() as { token?: string; url?: string; voice?: string; error?: string };
+      if (!response.ok || !payload.token || !payload.url || !payload.voice) {
+        throw new Error(payload.error ?? "Grok voice is not configured. Add XAI_API_KEY to .env.local.");
       }
-      conversation.startSession({
-        signedUrl: payload.signedUrl,
-        connectionType: "websocket",
-        overrides: {
-          agent: {
-            firstMessage: "I have the complete notes. What would you like me to explain or read?",
-            prompt: {
-              prompt: `You are EigenScribe, an accessible math notes voice guide. Use only the supplied document context. Answer questions about any part of the document and follow navigation requests such as “read the numerator” or “go back to the last formula.” Speak notation explicitly: multiplication as “times,” exponents as “to the power of,” and grouping as “open parenthesis” and “close parenthesis.” Pause naturally at formula boundaries. Never invent missing content.\n\nCOMPLETE DOCUMENT CONTEXT\nTitle: ${note.title}\n${context}`,
-            },
-          },
-        },
+      await conversation.startSession({
+        token: payload.token,
+        url: payload.url,
+        voice: payload.voice,
+        instructions: `You are EigenScribe, an accessible math notes voice guide. Use only the supplied document context. Answer questions about any part of the document and follow navigation requests such as “read the numerator” or “go back to the last formula.” Speak notation explicitly: multiplication as “times,” exponents as “to the power of,” and grouping as “open parenthesis” and “close parenthesis.” Pause naturally at formula boundaries. Never invent missing content.\n\nCOMPLETE DOCUMENT CONTEXT\nTitle: ${note.title}\n${context}`,
       });
     } catch (reason) {
       setAgentStarting(false);
@@ -255,7 +249,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
 
       <section className="voice-mode">
         <span className="mode-number">3</span>
-        <div><h2>Talk about the notes</h2><p>The live ElevenLabs agent listens and answers with the entire document as context.</p></div>
+        <div><h2>Talk about the notes</h2><p>Grok voice listens and answers with the entire document as context.</p></div>
         {connected ? (
           <Button variant="outline" onClick={() => conversation.endSession()}><PhoneOff /> End conversation</Button>
         ) : (
@@ -273,5 +267,5 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
 }
 
 export function ReaderControls(props: ReaderControlsProps) {
-  return <ConversationProvider><ReaderControlsInner {...props} /></ConversationProvider>;
+  return <ReaderControlsInner {...props} />;
 }

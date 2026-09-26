@@ -9,7 +9,7 @@ export async function POST(request: Request) {
     });
     if (!response.ok) {
       const payload = await response.json();
-      return Response.json({ error: payload.detail ?? "ElevenLabs speech generation failed." }, { status: response.status });
+      return Response.json({ error: payload.detail ?? "Grok speech generation failed." }, { status: response.status });
     }
     return new Response(response.body, {
       status: 200,

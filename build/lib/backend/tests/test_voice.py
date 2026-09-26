@@ -1,9 +1,10 @@
+import json
 from types import SimpleNamespace
 
 import httpx
 
 from backend.app.domain.models import BlockKind, MathNode, NoteBlock, NoteSource, SemanticNote, SourceKind
-from backend.app.services.voice import ElevenLabsVoiceService, MathNarrationService
+from backend.app.services.voice import GrokVoiceService, MathNarrationService
 
 
 def note_fixture() -> SemanticNote:
@@ -34,11 +35,7 @@ def note_fixture() -> SemanticNote:
 
 
 async def test_formula_fallback_adds_explicit_math_and_pause():
-    service = MathNarrationService(
-        api_key=None,
-        model="unused",
-        tts_model="eleven_v3",
-    )
+    service = MathNarrationService(api_key=None, model="unused")
 
     script = await service.prepare(note_fixture(), block_index=1)
 
@@ -56,33 +53,34 @@ async def test_full_note_narration_uses_text_llm_when_configured():
     service = MathNarrationService(
         api_key="test-openai-key",
         model="narrator-model",
-        tts_model="eleven_v3",
         client=SimpleNamespace(responses=Responses()),
     )
 
     assert await service.prepare(note_fixture()) == "Prepared accessible narration."
 
 
-async def test_elevenlabs_tts_stt_and_agent_url_requests():
+async def test_grok_tts_stt_and_realtime_session_requests():
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        if request.url.path.endswith("get-signed-url"):
-            return httpx.Response(200, json={"signed_url": "wss://example.test/conversation"})
-        if request.url.path.endswith("speech-to-text"):
+        if request.url.path.endswith("/realtime/client_secrets"):
             return httpx.Response(
                 200,
-                json={"text": "read the numerator", "language_code": "en"},
+                json={"value": "xai-realtime-client-secret-test", "expires_at": 1750000000},
             )
+        if request.url.path.endswith("/stt"):
+            return httpx.Response(200, json={"text": "read the numerator", "language": "en"})
+        body = json.loads(request.content)
+        assert body == {"text": "hello", "voice_id": "eve", "language": "en"}
         return httpx.Response(200, content=b"mp3-data")
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        service = ElevenLabsVoiceService(
-            api_key="test-elevenlabs-key",
-            voice_id="voice-id",
-            tts_model="eleven_v3",
-            stt_model="scribe_v2",
+        service = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            language="en",
+            realtime_model="grok-voice-latest",
             client=client,
         )
         assert await service.synthesize("hello") == b"mp3-data"
@@ -91,10 +89,13 @@ async def test_elevenlabs_tts_stt_and_agent_url_requests():
             content=b"audio",
             content_type="audio/webm",
         )
-        signed_url = await service.create_agent_signed_url("agent-id")
+        session = await service.create_realtime_session()
 
-    assert transcript["text"] == "read the numerator"
-    assert signed_url == "wss://example.test/conversation"
-    assert all(request.headers["xi-api-key"] == "test-elevenlabs-key" for request in requests)
-    assert requests[0].url.path == "/v1/text-to-speech/voice-id"
-    assert requests[2].url.params["agent_id"] == "agent-id"
+    assert transcript == {"text": "read the numerator", "languageCode": "en"}
+    assert session["token"] == "xai-realtime-client-secret-test"
+    assert session["url"] == "wss://api.x.ai/v1/realtime?model=grok-voice-latest"
+    assert session["voice"] == "eve"
+    assert all(request.headers["authorization"] == "Bearer test-xai-key" for request in requests)
+    assert requests[0].url.path == "/v1/tts"
+    assert requests[1].url.path == "/v1/stt"
+    assert requests[2].url.path == "/v1/realtime/client_secrets"

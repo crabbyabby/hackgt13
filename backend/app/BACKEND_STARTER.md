@@ -102,8 +102,8 @@ Returned sourceUrl/imageUrl values are relative to the backend origin. The
 frontend should resolve them against http://127.0.0.1:8000, not its own origin.
 Audio is generated on demand and is not persisted. Full-document and individual
 formula narration first pass through the math narration service, then through
-ElevenLabs TTS. Real-time note conversations use a server-created ElevenLabs
-signed URL; keep both provider credentials on the server. A production audio
+Grok text-to-speech. Real-time note conversations use a server-created Grok
+client secret; keep the xAI API key on the server. A production audio
 cache key should include document ID + revision + block ID. Edited spokenText is
 still supplied by the review interface as a deterministic fallback.
 

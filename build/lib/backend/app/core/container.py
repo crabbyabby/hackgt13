@@ -13,7 +13,7 @@ from backend.app.services.extraction import ExtractionPipeline
 from backend.app.services.pdf_processing import PdfProcessingService
 from backend.app.services.publication import PublicationService
 from backend.app.services.voice import (
-    ElevenLabsVoiceService,
+    GrokVoiceService,
     MathNarrationService,
     VoiceNavigationService,
 )
@@ -26,7 +26,11 @@ pdf_processors = {
 }
 if settings.openai_api_key:
     pdf_processors[AiProvider.OPENAI] = OpenAIPdfProcessor(
-        api_key=settings.openai_api_key, default_model=settings.openai_pdf_model, effort=settings.transcription_effort, raw_pass=settings.transcription_raw_pass
+        api_key=settings.openai_api_key,
+        default_model=settings.openai_pdf_model,
+        effort=settings.transcription_effort,
+        raw_pass=settings.transcription_raw_pass,
+        grounding_pass=settings.transcription_grounding_pass,
     )
 if settings.gemini_api_key:
     pdf_processors[AiProvider.GOOGLE] = GeminiPdfProcessor(
@@ -38,15 +42,14 @@ if settings.xai_api_key:
     )
 pdf_processing_service = PdfProcessingService(processors=pdf_processors)
 publication_service = PublicationService(notes=repository)
-elevenlabs_voice_service = ElevenLabsVoiceService(
-    api_key=settings.elevenlabs_api_key,
-    voice_id=settings.elevenlabs_voice_id,
-    tts_model=settings.elevenlabs_tts_model,
-    stt_model=settings.elevenlabs_stt_model,
+grok_voice_service = GrokVoiceService(
+    api_key=settings.xai_api_key,
+    voice_id=settings.grok_voice_id,
+    language=settings.grok_voice_language,
+    realtime_model=settings.grok_voice_model,
 )
 math_narration_service = MathNarrationService(
     api_key=settings.openai_api_key,
     model=settings.narration_model,
-    tts_model=settings.elevenlabs_tts_model,
 )
 voice_navigation_service = VoiceNavigationService()

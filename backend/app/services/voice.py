@@ -26,61 +26,70 @@ class VoiceProviderUnavailable(VoiceProviderError):
     pass
 
 
-class ElevenLabsVoiceService:
+TTS_CHAR_LIMIT = 14_000
+GROK_PAUSE = "[pause]"
+
+
+class GrokVoiceService:
+    """Grok text-to-speech, speech-to-text, and realtime session credentials."""
+
     def __init__(
         self,
         *,
         api_key: str | None,
         voice_id: str,
-        tts_model: str,
-        stt_model: str,
+        language: str,
+        realtime_model: str,
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
-        self.tts_model = tts_model
-        self.stt_model = stt_model
+        self.language = language
+        self.realtime_model = realtime_model
         self.client = client
 
     def _require_key(self) -> str:
         if not self.api_key:
-            raise VoiceProviderUnavailable("Configure ELEVENLABS_API_KEY in .env.local.")
+            raise VoiceProviderUnavailable("Configure XAI_API_KEY in .env.local.")
         return self.api_key
 
     async def synthesize(self, text: str) -> bytes:
         api_key = self._require_key()
-        request_client = self.client or httpx.AsyncClient(timeout=60)
+        request_client = self.client or httpx.AsyncClient(timeout=90)
+        chunks = self._speech_chunks(text)
         started = perf_counter()
         logger.info(
-            "TTS start | provider=elevenlabs model=%s voice=%s chars=%d preview=%r",
-            self.tts_model,
+            "TTS start | provider=grok voice=%s language=%s chars=%d chunks=%d preview=%r",
             self.voice_id,
+            self.language,
             len(text),
+            len(chunks),
             preview(text),
         )
+        audio = bytearray()
         try:
-            logger.info("TTS waiting for ElevenLabs response…")
-            response = await request_client.post(
-                f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
-                params={"output_format": "mp3_44100_128"},
-                headers={"xi-api-key": api_key, "Content-Type": "application/json"},
-                json={
-                    "text": text,
-                    "model_id": self.tts_model,
-                    "voice_settings": {"stability": 0.55, "similarity_boost": 0.75, "speed": 0.92},
-                },
-            )
-            response.raise_for_status()
+            for index, chunk in enumerate(chunks, start=1):
+                logger.info("TTS waiting for Grok response | chunk=%d/%d", index, len(chunks))
+                response = await request_client.post(
+                    "https://api.x.ai/v1/tts",
+                    headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                    json={"text": chunk, "voice_id": self.voice_id, "language": self.language},
+                )
+                if response.is_error:
+                    raise VoiceProviderError(
+                        f"Grok speech generation failed ({response.status_code}): {response.text[:300]}"
+                    )
+                audio.extend(response.content)
             logger.info(
                 "TTS complete | bytes=%d elapsed=%.2fs content_type=%s",
-                len(response.content),
+                len(audio),
                 perf_counter() - started,
-                response.headers.get("content-type", "unknown"),
+                "audio/mpeg",
             )
-            return response.content
+            return bytes(audio)
         except httpx.HTTPError as exc:
             logger.exception("TTS failed after %.2fs", perf_counter() - started)
-            raise VoiceProviderError(f"ElevenLabs speech generation failed: {exc}") from exc
+            raise VoiceProviderError(f"Grok speech generation failed: {exc}") from exc
         finally:
             if self.client is None:
                 await request_client.aclose()
@@ -90,66 +99,97 @@ class ElevenLabsVoiceService:
         request_client = self.client or httpx.AsyncClient(timeout=90)
         started = perf_counter()
         logger.info(
-            "STT start | provider=elevenlabs model=%s file=%r bytes=%d content_type=%s",
-            self.stt_model,
+            "STT start | provider=grok file=%r bytes=%d content_type=%s",
             filename,
             len(content),
             content_type,
         )
         try:
-            logger.info("STT waiting for ElevenLabs transcription…")
+            logger.info("STT waiting for Grok transcription…")
             response = await request_client.post(
-                "https://api.elevenlabs.io/v1/speech-to-text",
-                headers={"xi-api-key": api_key},
+                "https://api.x.ai/v1/stt",
+                headers={"Authorization": f"Bearer {api_key}"},
+                data={"language": self.language, "format": "true"},
                 files={"file": (filename, content, content_type)},
-                data={"model_id": self.stt_model},
             )
-            response.raise_for_status()
+            if response.is_error:
+                raise VoiceProviderError(
+                    f"Grok transcription failed ({response.status_code}): {response.text[:300]}"
+                )
             payload = response.json()
             logger.info(
                 "STT complete | elapsed=%.2fs language=%s partial_result=%r",
                 perf_counter() - started,
-                payload.get("language_code", "unknown"),
+                payload.get("language", "unknown"),
                 preview(payload.get("text", "")),
             )
             return {
                 "text": payload.get("text", "").strip(),
-                "languageCode": payload.get("language_code"),
-                "languageProbability": payload.get("language_probability"),
+                "languageCode": payload.get("language"),
             }
+        except VoiceProviderError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
             logger.exception("STT failed after %.2fs", perf_counter() - started)
-            raise VoiceProviderError(f"ElevenLabs transcription failed: {exc}") from exc
+            raise VoiceProviderError(f"Grok transcription failed: {exc}") from exc
         finally:
             if self.client is None:
                 await request_client.aclose()
 
-    async def create_agent_signed_url(self, agent_id: str | None) -> str:
+    async def create_realtime_session(self) -> dict[str, Any]:
         api_key = self._require_key()
-        if not agent_id:
-            raise VoiceProviderUnavailable("Configure ELEVENLABS_AGENT_ID in .env.local.")
         request_client = self.client or httpx.AsyncClient(timeout=30)
         started = perf_counter()
-        logger.info("Voice agent auth start | agent=%s", agent_id)
+        logger.info("Voice session start | provider=grok model=%s voice=%s", self.realtime_model, self.voice_id)
         try:
-            logger.info("Voice agent auth waiting for ElevenLabs signed URL…")
-            response = await request_client.get(
-                "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url",
-                params={"agent_id": agent_id},
-                headers={"xi-api-key": api_key},
+            logger.info("Voice session waiting for Grok client secret…")
+            response = await request_client.post(
+                "https://api.x.ai/v1/realtime/client_secrets",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                json={"expires_after": {"seconds": 600}},
             )
-            response.raise_for_status()
-            signed_url = response.json().get("signed_url")
-            if not signed_url:
-                raise VoiceProviderError("ElevenLabs returned no signed conversation URL.")
-            logger.info("Voice agent auth complete | elapsed=%.2fs", perf_counter() - started)
-            return str(signed_url)
+            if response.is_error:
+                raise VoiceProviderError(
+                    f"Grok voice session failed ({response.status_code}): {response.text[:300]}"
+                )
+            payload = response.json()
+            token = payload.get("value")
+            if not token:
+                raise VoiceProviderError("Grok returned no realtime client secret.")
+            logger.info("Voice session ready | elapsed=%.2fs", perf_counter() - started)
+            return {
+                "token": str(token),
+                "expiresAt": payload.get("expires_at"),
+                "url": f"wss://api.x.ai/v1/realtime?model={self.realtime_model}",
+                "voice": self.voice_id,
+            }
+        except VoiceProviderError:
+            raise
         except (httpx.HTTPError, ValueError) as exc:
-            logger.exception("Voice agent auth failed after %.2fs", perf_counter() - started)
-            raise VoiceProviderError(f"ElevenLabs agent connection failed: {exc}") from exc
+            logger.exception("Voice session failed after %.2fs", perf_counter() - started)
+            raise VoiceProviderError(f"Grok voice session failed: {exc}") from exc
         finally:
             if self.client is None:
                 await request_client.aclose()
+
+    @staticmethod
+    def _speech_chunks(text: str) -> list[str]:
+        remaining = text.strip()
+        if not remaining:
+            raise VoiceProviderError("The narration script is empty.")
+        chunks: list[str] = []
+        while remaining:
+            if len(remaining) <= TTS_CHAR_LIMIT:
+                chunks.append(remaining)
+                break
+            split_at = remaining.rfind("\n\n", 0, TTS_CHAR_LIMIT)
+            if split_at < TTS_CHAR_LIMIT // 2:
+                split_at = remaining.rfind(" ", 0, TTS_CHAR_LIMIT)
+            if split_at < 1:
+                split_at = TTS_CHAR_LIMIT
+            chunks.append(remaining[:split_at].strip())
+            remaining = remaining[split_at:].strip()
+        return chunks
 
 
 class MathNarrationService:
@@ -160,12 +200,10 @@ class MathNarrationService:
         *,
         api_key: str | None,
         model: str,
-        tts_model: str,
         client: Any | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
-        self.tts_model = tts_model
         self.client = client
 
     async def prepare(self, note: SemanticNote, block_index: int | None = None) -> str:
@@ -183,7 +221,6 @@ class MathNarrationService:
             logger.info("Narration LLM unavailable; returning deterministic script | scope=%s", scope)
             return fallback
 
-        pause = "[pause]" if self.tts_model == "eleven_v3" else '<break time="0.6s" />'
         prompt_scope = "the complete notes document" if block_index is None else "this single formula"
         source = "\n\n".join(self._block_source(block) for block in blocks)
         prompt = f"""Convert {prompt_scope} into a precise screen-reader narration script.
@@ -192,8 +229,8 @@ Rules:
 - Return only the script that should be spoken. Never use Markdown or raw LaTeX.
 - Preserve every statement, annotation, qualification, and mathematical relationship.
 - Speak operators, grouping, fractions, roots, subscripts, matrices, and exponents explicitly.
-- Insert {pause} at meaningful mathematical boundaries, especially before and after grouped terms.
-- Say 2(x+1) as: two times {pause} open parenthesis x plus one close parenthesis.
+- Insert {GROK_PAUSE} at meaningful mathematical boundaries, especially before and after grouped terms.
+- Say 2(x+1) as: two times {GROK_PAUSE} open parenthesis x plus one close parenthesis.
 - Say e^x as: e to the power of x.
 - For a fraction, identify the numerator and denominator and pause between them.
 - Do not solve, simplify, correct, or add facts that are absent from the notes.
@@ -253,8 +290,7 @@ Semantic source:
                 parts.append(self._paced_math(block.math.latex, block.math.spoken))
             if block.altText:
                 parts.append(f"Visual description. {block.altText}")
-        pause = "[pause]" if self.tts_model == "eleven_v3" else '<break time="0.6s" />'
-        return f"\n\n{pause}\n\n".join(part for part in parts if part)
+        return f"\n\n{GROK_PAUSE}\n\n".join(part for part in parts if part)
 
     @staticmethod
     def _block_source(block: NoteBlock) -> str:

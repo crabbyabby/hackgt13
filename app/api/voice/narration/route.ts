@@ -10,7 +10,7 @@ export async function POST(request: Request) {
     if (!response.ok) {
       const payload = await response.json() as { detail?: string };
       return Response.json(
-        { error: payload.detail ?? "ElevenLabs narration failed." },
+        { error: payload.detail ?? "Grok narration failed." },
         { status: response.status },
       );
     }

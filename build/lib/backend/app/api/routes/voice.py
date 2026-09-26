@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.core.config import settings
 from backend.app.core.container import (
-    elevenlabs_voice_service,
+    grok_voice_service,
     math_narration_service,
     voice_navigation_service,
 )
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/voice", tags=["voice"])
 
 
 class SpeechRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=5000)
+    text: str = Field(min_length=1, max_length=15000)
 
 
 class NavigationRequest(BaseModel):
@@ -34,32 +34,29 @@ class NarrationRequest(BaseModel):
 @router.get("/config")
 async def voice_config():
     return {
-        "provider": "elevenlabs",
-        "available": bool(settings.elevenlabs_api_key),
-        "agentAvailable": bool(settings.elevenlabs_api_key and settings.elevenlabs_agent_id),
-        "voiceId": settings.elevenlabs_voice_id,
-        "ttsModel": settings.elevenlabs_tts_model,
-        "sttModel": settings.elevenlabs_stt_model,
+        "provider": "grok",
+        "available": bool(settings.xai_api_key),
+        "agentAvailable": bool(settings.xai_api_key),
+        "voiceId": settings.grok_voice_id,
+        "realtimeModel": settings.grok_voice_model,
+        "language": settings.grok_voice_language,
     }
 
 
-@router.get("/agent/signed-url")
-async def create_agent_signed_url():
+@router.get("/agent/session")
+async def create_agent_session():
     try:
-        signed_url = await elevenlabs_voice_service.create_agent_signed_url(
-            settings.elevenlabs_agent_id
-        )
+        return await grok_voice_service.create_realtime_session()
     except VoiceProviderUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return {"signedUrl": signed_url}
 
 
 @router.post("/speech")
 async def create_speech(body: SpeechRequest):
     try:
-        audio = await elevenlabs_voice_service.synthesize(body.text)
+        audio = await grok_voice_service.synthesize(body.text)
     except VoiceProviderUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
@@ -73,7 +70,7 @@ async def create_narration(body: NarrationRequest):
         raise HTTPException(status_code=422, detail="The requested note block does not exist.")
     script = await math_narration_service.prepare(body.note, body.blockIndex)
     try:
-        audio = await elevenlabs_voice_service.synthesize(script)
+        audio = await grok_voice_service.synthesize(script)
     except VoiceProviderUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
@@ -101,7 +98,7 @@ async def create_transcription(file: Annotated[UploadFile, File()]):
     if not content:
         raise HTTPException(status_code=400, detail="The voice command recording is empty.")
     try:
-        return await elevenlabs_voice_service.transcribe(
+        return await grok_voice_service.transcribe(
             filename=file.filename or "voice-command.webm",
             content=content,
             content_type=file.content_type or "audio/webm",
