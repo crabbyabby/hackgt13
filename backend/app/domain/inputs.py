@@ -1,5 +1,7 @@
 from dataclasses import dataclass, field
 
+from backend.app.document_processing.pdf_processing import PdfTranscription
+
 from .models import NoteBlock, PipelineStage, SemanticNote, StageReport
 
 
@@ -8,6 +10,7 @@ class SourceDocument:
     filename: str
     content_type: str
     content: bytes
+    transcription: PdfTranscription | None = None
 
 
 @dataclass(slots=True)

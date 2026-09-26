@@ -57,6 +57,13 @@ class MathNode(BaseModel):
     # roots, exponents, matrix rows/columns, and aligned derivation steps.
 
 
+class NoteInterpretation(BaseModel):
+    reading: str
+    latex: str | None = None
+    confidence: float = Field(ge=0, le=1)
+    evidence: str
+
+
 class NoteBlock(BaseModel):
     id: str = Field(default_factory=lambda: f"block_{uuid4().hex}")
     kind: BlockKind
@@ -67,12 +74,15 @@ class NoteBlock(BaseModel):
     sourceRegion: SourceRegion | None = None
     confidence: float = Field(ge=0, le=1)
     needsReview: bool
+    interpretations: list[NoteInterpretation] = Field(default_factory=list)
 
 
 class NoteSource(BaseModel):
     name: str
     kind: SourceKind
     pageCount: int = Field(ge=1)
+    aiProvider: str | None = None
+    aiModel: str | None = None
 
 
 class SemanticNote(BaseModel):

@@ -18,6 +18,7 @@ export type NoteBlock = {
   sourceRegion?: { page: number; x: number; y: number; width: number; height: number };
   confidence: number;
   needsReview: boolean;
+  interpretations?: Array<{ reading: string; latex?: string; confidence: number; evidence: string }>;
 };
 
 export type SemanticNote = {
@@ -25,7 +26,7 @@ export type SemanticNote = {
   slug: string;
   title: string;
   course?: string;
-  source: { name: string; kind: SourceKind; pageCount: number };
+  source: { name: string; kind: SourceKind; pageCount: number; aiProvider?: string; aiModel?: string };
   blocks: NoteBlock[];
   status: "draft" | "published";
   createdAt: string;

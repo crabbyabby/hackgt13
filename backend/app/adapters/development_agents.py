@@ -8,6 +8,7 @@ from backend.app.domain.models import (
     MathNode,
     MathVariable,
     NoteBlock,
+    NoteInterpretation,
     NoteSource,
     PipelineStage,
     SemanticNote,
@@ -20,6 +21,15 @@ class DevelopmentIngestAgent:
     stage = PipelineStage.INGEST
 
     async def run(self, context: PipelineContext) -> PipelineContext:
+        if context.source.transcription is not None:
+            transcription = context.source.transcription
+            context.page_count = transcription.pageCount
+            context.report(
+                self.stage,
+                f"Transcribed with {transcription.provider.value}/{transcription.model}; "
+                f"overall confidence {transcription.overallConfidence:.0%}.",
+            )
+            return context
         context.page_count = 2 if context.source.content_type == "application/pdf" else 1
         context.report(self.stage, "Normalized source pages and captured source metadata.")
         return context
@@ -29,6 +39,73 @@ class DevelopmentLayoutAgent:
     stage = PipelineStage.LAYOUT
 
     async def run(self, context: PipelineContext) -> PipelineContext:
+        if context.source.transcription is not None:
+            kind_map = {
+                "equation": BlockKind.EQUATION,
+                "diagram": BlockKind.DIAGRAM,
+                "graph": BlockKind.GRAPH,
+                "annotation": BlockKind.ANNOTATION,
+                "arrow": BlockKind.ANNOTATION,
+                "highlight": BlockKind.ANNOTATION,
+                "strikeout": BlockKind.ANNOTATION,
+            }
+            for page in context.source.transcription.pages:
+                for region in page.regions:
+                    best = max(region.interpretations, key=lambda candidate: candidate.confidence)
+                    block_kind = kind_map.get(region.kind, BlockKind.PARAGRAPH)
+                    context.blocks.append(
+                        NoteBlock(
+                            kind=block_kind,
+                            title=region.visualStyle if block_kind == BlockKind.ANNOTATION else None,
+                            text=region.verbatim,
+                            math=(
+                                MathNode(
+                                    latex=best.latex or region.verbatim,
+                                    spoken=best.reading,
+                                    label="Handwritten equation",
+                                )
+                                if block_kind == BlockKind.EQUATION
+                                else None
+                            ),
+                            altText=(
+                                best.reading
+                                if block_kind in {BlockKind.GRAPH, BlockKind.DIAGRAM}
+                                else None
+                            ),
+                            confidence=region.confidence,
+                            needsReview=region.needsReview or len(region.interpretations) > 1,
+                            interpretations=[
+                                NoteInterpretation(
+                                    reading=candidate.reading,
+                                    latex=candidate.latex,
+                                    confidence=candidate.confidence,
+                                    evidence=candidate.evidence,
+                                )
+                                for candidate in region.interpretations
+                            ],
+                            sourceRegion=SourceRegion(
+                                page=page.pageNumber,
+                                x=region.bounds.x,
+                                y=region.bounds.y,
+                                width=region.bounds.width,
+                                height=region.bounds.height,
+                            ),
+                        )
+                    )
+                if not page.regions and page.rawTranscription:
+                    context.blocks.append(
+                        NoteBlock(
+                            kind=BlockKind.PARAGRAPH,
+                            text=page.rawTranscription,
+                            confidence=page.pageConfidence,
+                            needsReview=True,
+                        )
+                    )
+            context.report(
+                self.stage,
+                "Converted verbatim transcription regions into reviewable semantic blocks.",
+            )
+            return context
         context.blocks.extend(
             [
                 NoteBlock(
@@ -62,6 +139,9 @@ class DevelopmentMathAgent:
     stage = PipelineStage.MATH
 
     async def run(self, context: PipelineContext) -> PipelineContext:
+        if context.source.transcription is not None:
+            context.report(self.stage, "Carried forward ranked LaTeX and spoken-math interpretations.")
+            return context
         context.blocks.insert(
             2,
             NoteBlock(
@@ -90,6 +170,9 @@ class DevelopmentVisualAgent:
     stage = PipelineStage.VISUALS
 
     async def run(self, context: PipelineContext) -> PipelineContext:
+        if context.source.transcription is not None:
+            context.report(self.stage, "Carried forward graph, diagram, color, and annotation descriptions.")
+            return context
         context.blocks.append(
             NoteBlock(
                 kind=BlockKind.GRAPH,
@@ -109,8 +192,12 @@ class DevelopmentReconciliationAgent:
     stage = PipelineStage.RECONCILE
 
     async def run(self, context: PipelineContext) -> PipelineContext:
-        # TODO(ai): Compare independent agent outputs and surrounding notation.
-        context.report(self.stage, "Reconciled ambiguous notation against nearby definitions.")
+        if context.source.transcription is not None:
+            review_count = sum(block.needsReview for block in context.blocks)
+            context.report(self.stage, f"Preserved {review_count} ambiguous regions for instructor review.")
+        else:
+            # TODO(ai): Compare independent agent outputs and surrounding notation.
+            context.report(self.stage, "Reconciled ambiguous notation against nearby definitions.")
         return context
 
 
@@ -118,7 +205,10 @@ class DevelopmentAccessibilityCompiler:
     stage = PipelineStage.ACCESSIBILITY
 
     async def run(self, context: PipelineContext) -> PipelineContext:
-        title = next(
+        extracted_title = (
+            context.source.transcription.documentTitle if context.source.transcription is not None else None
+        )
+        title = extracted_title or next(
             (block.text for block in context.blocks if block.kind == BlockKind.HEADING), "Untitled notes"
         )
         context.note = SemanticNote(
@@ -129,6 +219,12 @@ class DevelopmentAccessibilityCompiler:
                 name=context.source.filename,
                 kind=SourceKind.PDF if context.source.content_type == "application/pdf" else SourceKind.IMAGE,
                 pageCount=context.page_count,
+                aiProvider=(
+                    context.source.transcription.provider.value
+                    if context.source.transcription is not None
+                    else None
+                ),
+                aiModel=(context.source.transcription.model if context.source.transcription is not None else None),
             ),
             blocks=context.blocks,
         )

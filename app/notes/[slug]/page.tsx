@@ -10,7 +10,10 @@ import type { SemanticNote } from "@/lib/domain/note";
 export default function ReaderPage() {
   const [note, setNote] = useState<SemanticNote | null>(null);
   const [index, setIndex] = useState(0);
-  useEffect(() => setNote(loadDraft() ?? { ...createDemoNote(), status: "published" }), []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setNote(loadDraft() ?? { ...createDemoNote(), status: "published" }), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   if (!note) return <AppShell step="reader"><main className="single-column"><p>Loading note…</p></main></AppShell>;
 
   return (

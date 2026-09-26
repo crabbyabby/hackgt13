@@ -47,7 +47,24 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, data fl
 
 ## Configuration
 
-Copy `.env.example` to `.env.local` when an integration is ready. Keep `EXTRACTION_PROVIDER=development` until a production extraction adapter is implemented.
+Copy `.env.example` to `.env.local` when an integration is ready. Keep `EXTRACTION_PROVIDER=development`
+for the local pipeline agents. The uploader automatically enables model choices for every configured
+provider: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Google Gemini, and `XAI_API_KEY` for Grok.
+Choices without a configured key remain visible but disabled.
+
+The PDF transcription API is separate from semantic formatting:
+
+```bash
+curl http://127.0.0.1:8000/v1/pdf-processing/models
+curl -X POST http://127.0.0.1:8000/v1/pdf-processing/transcriptions \
+  -F 'file=@/absolute/path/to/notes.pdf' \
+  -F 'provider=openai' \
+  -F 'model=gpt-6-sol'
+```
+
+The response preserves page order, literal text, equations, visual marks, bounding boxes, color/style,
+relationships, review flags, and alternative interpretations. Confidence values are model-reported and
+must be confirmed during instructor review.
 
 ## Useful commands
 

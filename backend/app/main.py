@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.api.routes import extraction_router, notes_router, voice_router
+from backend.app.api.routes import extraction_router, notes_router, pdf_processing_router, voice_router
 
 app = FastAPI(
     title="EigenScribe API",
@@ -16,6 +16,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.include_router(extraction_router, prefix="/v1")
+app.include_router(pdf_processing_router, prefix="/v1")
 app.include_router(notes_router, prefix="/v1")
 app.include_router(voice_router, prefix="/v1")
 

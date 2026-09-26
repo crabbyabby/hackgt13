@@ -12,7 +12,10 @@ import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
 export default function ReviewPage() {
   const [note, setNote] = useState<SemanticNote | null>(null);
   const router = useRouter();
-  useEffect(() => setNote(loadDraft() ?? createDemoNote()), []);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setNote(loadDraft() ?? createDemoNote()), 0);
+    return () => window.clearTimeout(timer);
+  }, []);
   const reviewCount = useMemo(() => note?.blocks.filter((block) => block.needsReview).length ?? 0, [note]);
 
   function updateBlock(updated: NoteBlock) {
@@ -34,7 +37,7 @@ export default function ReviewPage() {
     <AppShell step="review">
       <main className="review-layout">
         <aside className="review-summary">
-          <p className="overline">Source</p><h2>{note.source.name}</h2><dl><div><dt>Pages</dt><dd>{note.source.pageCount}</dd></div><div><dt>Blocks</dt><dd>{note.blocks.length}</dd></div><div><dt>Needs review</dt><dd>{reviewCount}</dd></div></dl>
+          <p className="overline">Source</p><h2>{note.source.name}</h2><dl><div><dt>Pages</dt><dd>{note.source.pageCount}</dd></div><div><dt>Blocks</dt><dd>{note.blocks.length}</dd></div><div><dt>Needs review</dt><dd>{reviewCount}</dd></div>{note.source.aiProvider && <div><dt>AI provider</dt><dd>{note.source.aiProvider}</dd></div>}{note.source.aiModel && <div><dt>Model</dt><dd>{note.source.aiModel}</dd></div>}</dl>
           <div className="source-placeholder" aria-label="Source preview placeholder"><span>Page regions</span>{note.blocks.map((block) => <i key={block.id} className={block.needsReview ? "region-review" : ""} />)}</div>
         </aside>
         <section className="review-main">

@@ -8,11 +8,15 @@ Every feature operates on one versioned semantic document. OCR text, LaTeX, spok
 PDF / image
     │
     ▼
-Extraction job ──► page normalization ──► layout + reading order
-    │                                      │
-    │                                      ├─► math structure
-    │                                      ├─► graphs / diagrams
-    │                                      └─► notes / color / emphasis
+Source storage ──► loss-aware PDF transcription ──► semantic extraction job
+    │                     │                              │
+    │                     ├─► verbatim regions          ▼
+    │                     ├─► interpretation options  page normalization ──► layout + reading order
+    │                     └─► confidence + review        │
+    │                                                    │
+    │                                                    ├─► math structure
+    │                                                    ├─► graphs / diagrams
+    │                                                    └─► notes / color / emphasis
     │
     ▼
 SemanticNote draft ──► human review ──► immutable publication revision
@@ -27,6 +31,7 @@ SemanticNote draft ──► human review ──► immutable publication revisi
 ```text
 backend/app/
   api/routes/             FastAPI transport only
+  document_processing/    loss-aware PDF/handwriting transcription
   domain/                 Pydantic models and pipeline data
   ports/                  agent and repository interfaces
   adapters/               development fixtures and integration TODOs
@@ -95,6 +100,8 @@ The development store is in-memory and intentionally disposable. Production shou
 | `POST /api/extract` | TypeScript browser proxy to FastAPI | Working |
 | `POST /v1/extraction-jobs` | Create and currently execute an extraction job | Python development pipeline works |
 | `GET /v1/extraction-jobs/:id` | Read extraction progress | Python in-memory repository |
+| `GET /v1/pdf-processing/models` | List provider/model choices and API-key availability | Working |
+| `POST /v1/pdf-processing/transcriptions` | Produce pre-semantic, ambiguity-preserving transcription | Development, OpenAI, Gemini, or Grok |
 | `GET /v1/notes/:slug` | Read a semantic note | Python in-memory repository |
 | `PUT /v1/notes/:slug` | Save reviewer corrections | Python; needs authorization |
 | `POST /v1/notes/:slug/publish` | Create a publication | Python development implementation |
@@ -104,7 +111,7 @@ The development store is in-memory and intentionally disposable. Production shou
 
 ### Extraction
 
-- Implement an OpenAI Responses adapter using high-detail PDF/image inputs and strict structured output.
+- Connect the loss-aware PDF transcription result to the semantic extraction agents.
 - Add specialized fallbacks for low-confidence handwriting and math OCR.
 - Rasterize PDFs deterministically and retain source coordinates.
 - Add graph/diagram analysis with object-level descriptions.
