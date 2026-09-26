@@ -160,6 +160,12 @@ class TranscribedRegion(BaseModel):
     ]
     bounds: BoundingBox
     verbatim: str
+    # These must be first-class fields. Previously the prompt requested `latex`, but
+    # the structured-output schema did not contain it, so valid model LaTeX was dropped
+    # and raw OCR text was later presented as notation.
+    latex: str | None = None
+    spoken: str | None = None
+    description: str | None = None
     color: str
     visualStyle: str
     relationships: list[str]
@@ -229,8 +235,8 @@ def best_reading(region: TranscribedRegion) -> InterpretationCandidate:
     if region.interpretations:
         return max(region.interpretations, key=lambda candidate: candidate.confidence)
     return InterpretationCandidate(
-        reading=region.verbatim,
-        latex=region.verbatim if region.kind == "equation" else None,
+        reading=region.spoken or region.description or region.verbatim,
+        latex=(region.latex or region.verbatim) if region.kind == "equation" else None,
         confidence=region.confidence,
         evidence="Single unambiguous reading; no alternates were reported.",
     )
@@ -245,18 +251,44 @@ class PdfProcessingError(RuntimeError):
     pass
 
 
+_GROUNDING_INSTRUCTIONS = r"""
+Read these course notes as a careful mathematics instructor before converting them to a database.
+Produce a complete, page-by-page Markdown transcription that preserves the author's logical flow.
+Use headings, full sentences, display LaTeX, aligned derivations, real matrix/vector environments,
+and concise diagram descriptions. Include meaningful arrows, colors, highlights, marginal notes,
+crossed-out work, and labels, but do not turn notebook ruling, page furniture, or branding into
+course content. Do not solve, correct, or silently complete the author's mathematics. Mark genuinely
+unclear readings as [illegible] and give plausible alternatives. Keep related prose, annotations,
+and derivation steps together so the result reads like coherent notes rather than isolated OCR boxes.
+""".strip()
+
+
 _TRANSCRIPTION_INSTRUCTIONS = r"""
-You are the loss-aware transcription stage for EigenScribe. Transcribe the complete PDF before any
-semantic rewriting. Account for every visible handwritten or printed mark on every page, including
+You are the loss-aware structuring stage for EigenScribe. Use both the source PDF and the supplied
+grounded Markdown reading. Account for every meaningful handwritten or printed mark on every page, including
 titles, prose, equations, derivation steps, matrices, subscripts, superscripts, crossed-out work,
 arrows, circles, underlines, highlights, colors, labels, marginal notes, diagrams, graphs, tables,
-axes, legends, doodles that may carry meaning, and isolated marks.
+axes, legends, and doodles that may carry meaning. Ignore notebook ruling, page numbers unrelated to
+the lesson, scanner artifacts, and manufacturer branding unless they carry instructional meaning.
+
+A region is a coherent learning unit, not every separately positioned mark. Group a sentence with
+its nearby explanatory arrow or annotation. Group a multi-line derivation when the lines form one
+argument. Split only at a real heading, paragraph boundary, separate equation/derivation, example,
+or visual. Preserve reading order and do not emit fragments such as a lone step label, underline,
+dimension label, or arrow when it belongs to the adjacent block.
 
 For each region, preserve an exact visual/verbatim reading in `verbatim`. Never silently repair
-spelling, notation, or mathematical reasoning there. For mathematics, put the normalized reading in
-the region's `latex`. Do not collapse arrows, colors, highlights, spatial grouping, or crossed-out
+spelling, notation, or mathematical reasoning there. For every equation region, put valid LaTeX only
+in `latex` and a natural screen-reader rendering in `spoken`. Never put prose, Unicode math glyphs,
+semicolon-separated matrix rows, or OCR shorthand in `latex`. Do not collapse arrows, colors,
+highlights, spatial grouping, or crossed-out
 content into ordinary prose; record their relationships and visual style. Do not invent invisible
-content. Include stray or unassigned marks.
+content. Put non-instructional or genuinely unassigned marks in `unassignedMarks` instead of making
+them paragraph regions.
+
+For every diagram or graph region, put a self-contained visual description in `description`: state
+what is drawn, name axes and labels, describe the important shape or relationship, and explain any
+color or annotation needed to understand it. Do not merely repeat the graph's short written label.
 
 LaTeX must preserve two-dimensional structure. Write every column vector and matrix with a real
 environment: \begin{bmatrix}3\\-2\\-1\\0\end{bmatrix}, and an augmented matrix as
@@ -297,9 +329,10 @@ def transcription_instructions(*, raw_pass: bool) -> str:
 
 class OpenAIPdfProcessor:
     def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
-                 raw_pass: bool = True) -> None:
+                 raw_pass: bool = True, grounding_pass: bool = True) -> None:
         self.effort = effort
         self.raw_pass = raw_pass
+        self.grounding_pass = grounding_pass
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required to use OpenAI PDF models.")
         self.client = AsyncOpenAI(api_key=api_key)
@@ -310,30 +343,67 @@ class OpenAIPdfProcessor:
             raise PdfProcessingError("Cannot process an empty PDF.")
         selected_model = validate_pdf_model(AiProvider.OPENAI, model or self.default_model)
         encoded = base64.b64encode(content).decode("ascii")
+        file_input = {
+            "type": "input_file",
+            "filename": filename,
+            "file_data": f"data:application/pdf;base64,{encoded}",
+            "detail": "high",
+        }
         try:
+            grounded = ""
+            reasoning = _openai_reasoning(self.effort)
+            if self.grounding_pass:
+                logger.info(
+                    "OpenAI grounding pass start | model=%s file=%r bytes=%d",
+                    selected_model, filename, len(content),
+                )
+                grounding_response = await self.client.responses.create(
+                    model=selected_model,
+                    store=False,
+                    instructions=_GROUNDING_INSTRUCTIONS,
+                    input=[{
+                        "role": "user",
+                        "content": [file_input, {
+                            "type": "input_text",
+                            "text": "Read and transcribe the complete notes. Preserve their mathematical and visual context.",
+                        }],
+                    }],
+                    **({"reasoning": reasoning} if reasoning else {}),
+                )
+                grounded = grounding_response.output_text.strip()
+                if not grounded:
+                    raise PdfProcessingError("The model returned an empty grounding transcription.")
+                logger.info(
+                    "OpenAI grounding pass complete | characters=%d preview=%r",
+                    len(grounded), grounded[:500],
+                )
+
+            structuring_request = "Transcribe this PDF completely into the required loss-aware schema."
+            if grounded:
+                structuring_request = (
+                    "Convert the source PDF into the required schema using the grounded reading below. "
+                    "Verify every block against the PDF; the grounded reading is context, not authority.\n\n"
+                    "<grounded-reading>\n" + grounded + "\n</grounded-reading>"
+                )
+            logger.info("OpenAI structuring pass start | model=%s", selected_model)
             response = await self.client.responses.parse(
                 model=selected_model,
                 store=False,
-                instructions=transcription_instructions(raw_pass=self.raw_pass),
+                instructions=transcription_instructions(raw_pass=self.raw_pass and not grounded),
                 input=[
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "input_file",
-                                "filename": filename,
-                                "file_data": f"data:application/pdf;base64,{encoded}",
-                                "detail": "high",
-                            },
+                            file_input,
                             {
                                 "type": "input_text",
-                                "text": "Transcribe this PDF completely into the required loss-aware schema.",
+                                "text": structuring_request,
                             },
                         ],
                     }
                 ],
                 text_format=PdfTranscriptionPayload,
-                **({"reasoning": reasoning} if (reasoning := _openai_reasoning(self.effort)) else {}),
+                **({"reasoning": reasoning} if reasoning else {}),
             )
         except Exception as exc:  # SDK/network boundary; normalized for the API layer.
             raise PdfProcessingError(f"OpenAI PDF transcription failed: {exc}") from exc

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from io import BytesIO
+from pathlib import Path
 from time import perf_counter
 
 from PIL import Image
@@ -34,18 +35,31 @@ def convert_pages(
     *,
     provider: str = 'development',
     model: str = 'development-fixture',
+    source_path: str | None = None,
+    source_name: str | None = None,
 ) -> dict:
     """Transcribe normalized pages and adapt them to the persisted review contract."""
     started = perf_counter()
     logger.info(
         'Converter start | pages=%d provider=%s model=%s', len(page_images), provider, model
     )
-    pdf_content = _pages_to_pdf(page_images)
-    logger.info('Normalized pages assembled | pdf_bytes=%d', len(pdf_content))
+    original = None
+    if source_path:
+        candidate = Path(source_path)
+        if candidate.suffix.lower() == '.pdf':
+            original = candidate.read_bytes()
+    pdf_content = original or _pages_to_pdf(page_images)
+    filename = source_name or ('original-notes.pdf' if original else 'normalized-notes.pdf')
+    logger.info(
+        'Model input prepared | mode=%s filename=%r pdf_bytes=%d',
+        'original-pdf' if original else 'normalized-pages',
+        filename,
+        len(pdf_content),
+    )
     logger.info('Submitting PDF transcription request; waiting for %s/%s…', provider, model)
     transcription = asyncio.run(
         pdf_processing_service.transcribe(
-            filename='normalized-notes.pdf',
+            filename=filename,
             content=pdf_content,
             provider=provider,
             model=model,

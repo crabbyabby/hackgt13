@@ -26,7 +26,11 @@ pdf_processors = {
 }
 if settings.openai_api_key:
     pdf_processors[AiProvider.OPENAI] = OpenAIPdfProcessor(
-        api_key=settings.openai_api_key, default_model=settings.openai_pdf_model, effort=settings.transcription_effort, raw_pass=settings.transcription_raw_pass
+        api_key=settings.openai_api_key,
+        default_model=settings.openai_pdf_model,
+        effort=settings.transcription_effort,
+        raw_pass=settings.transcription_raw_pass,
+        grounding_pass=settings.transcription_grounding_pass,
     )
 if settings.gemini_api_key:
     pdf_processors[AiProvider.GOOGLE] = GeminiPdfProcessor(

@@ -65,6 +65,11 @@ async def test_openai_processor_sends_pdf_as_structured_file_input():
     class FakeResponses:
         def __init__(self):
             self.arguments = None
+            self.grounding_arguments = None
+
+        async def create(self, **kwargs):
+            self.grounding_arguments = kwargs
+            return SimpleNamespace(output_text="# Page 1\n\nA complete grounded reading.")
 
         async def parse(self, **kwargs):
             self.arguments = kwargs
@@ -81,6 +86,9 @@ async def test_openai_processor_sends_pdf_as_structured_file_input():
     file_input = fake_responses.arguments["input"][0]["content"][0]
     assert file_input["type"] == "input_file"
     assert file_input["file_data"].startswith("data:application/pdf;base64,")
+    assert file_input["detail"] == "high"
+    assert fake_responses.grounding_arguments is not None
+    assert "grounded-reading" in fake_responses.arguments["input"][0]["content"][1]["text"]
 
 
 def test_pdf_model_endpoint_rejects_unknown_model():
@@ -107,6 +115,33 @@ def test_unambiguous_regions_need_no_interpretations():
     assert best.reading == "A x = b"
     assert best.latex == "A x = b"
     assert best.confidence == 0.95
+
+
+def test_unambiguous_equation_keeps_first_class_latex_and_spoken_math():
+    region = TranscribedRegion(
+        id="r1", kind="equation", bounds=BoundingBox(x=1, y=1, width=10, height=5),
+        verbatim="A times x equals b", latex=r"A x = b", spoken="A times x equals b",
+        color="dark ink", visualStyle="handwritten", relationships=[],
+        interpretations=[], confidence=0.97, needsReview=False,
+    )
+
+    best = best_reading(region)
+
+    assert best.latex == r"A x = b"
+    assert best.reading == "A times x equals b"
+
+
+def test_graph_keeps_a_self_contained_visual_description():
+    region = TranscribedRegion(
+        id="g1", kind="graph", bounds=BoundingBox(x=1, y=1, width=40, height=30),
+        verbatim=r"f: R -> R", description="A downward-opening curve crosses the horizontal axis twice.",
+        color="dark ink", visualStyle="hand-drawn axes", relationships=[],
+        interpretations=[], confidence=0.92, needsReview=False,
+    )
+
+    assert best_reading(region).reading == (
+        "A downward-opening curve crosses the horizontal axis twice."
+    )
 
 
 def test_best_reading_still_prefers_the_highest_confidence_alternate():
@@ -155,7 +190,9 @@ async def test_openai_processor_sends_the_configured_reasoning_effort():
             self.arguments = kwargs
             return SimpleNamespace(output_parsed=payload)
 
-    processor = OpenAIPdfProcessor(api_key="test-key", default_model="gpt-6-sol", effort="low")
+    processor = OpenAIPdfProcessor(
+        api_key="test-key", default_model="gpt-6-sol", effort="low", grounding_pass=False
+    )
     fake = FakeResponses()
     processor.client = SimpleNamespace(responses=fake)
 
@@ -167,7 +204,9 @@ async def test_openai_processor_sends_the_configured_reasoning_effort():
 
 @pytest.mark.asyncio
 async def test_effort_can_be_disabled_entirely():
-    processor = OpenAIPdfProcessor(api_key="test-key", default_model="gpt-6-sol", effort="unset-value")
+    processor = OpenAIPdfProcessor(
+        api_key="test-key", default_model="gpt-6-sol", effort="unset-value", grounding_pass=False
+    )
     payload = PdfTranscriptionPayload(
         documentTitle=None, pageCount=1,
         pages=[PageTranscription(pageNumber=1, readingOrder=[], regions=[], unassignedMarks=[],

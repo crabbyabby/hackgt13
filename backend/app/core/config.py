@@ -31,10 +31,14 @@ class Settings:
     # reader, not a formatting one. Quality is the default; lower it only for throwaway runs.
     # One of: none, minimal, low, medium, high.
     transcription_effort: str = os.getenv("TRANSCRIPTION_EFFORT", "medium")
-    # Whether the model first writes a plain-prose reading of each page before emitting
-    # structured regions. It costs output tokens, but it grounds the structured pass;
-    # removing it alongside the effort cut is what collapsed matrix structure.
+    # Fallback grounding inside the structured response when the separate comprehension
+    # pass is disabled. With the default separate pass this duplicate output is skipped.
     transcription_raw_pass: bool = os.getenv("TRANSCRIPTION_RAW_PASS", "true").lower() != "false"
+    # A ChatGPT-like comprehension pass before strict JSON structuring. This is slower and
+    # costs an extra model call, but prevents a dense page from becoming disconnected OCR fragments.
+    transcription_grounding_pass: bool = (
+        os.getenv("TRANSCRIPTION_GROUNDING_PASS", "true").lower() != "false"
+    )
     max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 
 

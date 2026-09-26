@@ -95,6 +95,8 @@ def create_app(data_dir=None, converter=None):
                     images,
                     provider=doc.get('aiProvider', 'development'),
                     model=doc.get('aiModel', 'development-fixture'),
+                    source_path=str(source),
+                    source_name=doc.get('fileName'),
                 )
             else:
                 result = convert(images)
