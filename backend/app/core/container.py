@@ -12,7 +12,11 @@ from backend.app.document_processing.pdf_processing import (
 from backend.app.services.extraction import ExtractionPipeline
 from backend.app.services.pdf_processing import PdfProcessingService
 from backend.app.services.publication import PublicationService
-from backend.app.services.voice import VoiceSessionService
+from backend.app.services.voice import (
+    ElevenLabsVoiceService,
+    MathNarrationService,
+    VoiceNavigationService,
+)
 
 repository = InMemoryRepository()
 agents = production_agents() if settings.extraction_provider == "openai" else development_agents()
@@ -34,4 +38,15 @@ if settings.xai_api_key:
     )
 pdf_processing_service = PdfProcessingService(processors=pdf_processors)
 publication_service = PublicationService(notes=repository)
-voice_session_service = VoiceSessionService()
+elevenlabs_voice_service = ElevenLabsVoiceService(
+    api_key=settings.elevenlabs_api_key,
+    voice_id=settings.elevenlabs_voice_id,
+    tts_model=settings.elevenlabs_tts_model,
+    stt_model=settings.elevenlabs_stt_model,
+)
+math_narration_service = MathNarrationService(
+    api_key=settings.openai_api_key,
+    model=settings.narration_model,
+    tts_model=settings.elevenlabs_tts_model,
+)
+voice_navigation_service = VoiceNavigationService()

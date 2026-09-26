@@ -100,9 +100,12 @@ $env:FRONTEND_ORIGINS = 'http://localhost:5173,http://localhost:3000'
 
 Returned sourceUrl/imageUrl values are relative to the backend origin. The
 frontend should resolve them against http://127.0.0.1:8000, not its own origin.
-Audio cache keys should include document ID + revision + block ID. This backend
-does not store audio or regenerate narration; edited spokenText is supplied by
-the review interface. HTML export remains Person 4's responsibility.
+Audio is generated on demand and is not persisted. Full-document and individual
+formula narration first pass through the math narration service, then through
+ElevenLabs TTS. Real-time note conversations use a server-created ElevenLabs
+signed URL; keep both provider credentials on the server. A production audio
+cache key should include document ID + revision + block ID. Edited spokenText is
+still supplied by the review interface as a deterministic fallback.
 
 ## Test
 

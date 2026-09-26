@@ -39,13 +39,15 @@ Open <http://localhost:5173>. FastAPI documentation is available at <http://loca
 1. Upload a PDF or image, or open the development fixture.
 2. Review semantic blocks, math notation, spoken math, and visual descriptions.
 3. Generate a reader link.
-4. Navigate, listen to, and download the accessible note.
+4. Generate a full-note MP3, click a formula for paced math narration, start a
+   real-time document-aware voice conversation, or download the accessible note.
 
 ## Architecture
 
 The Python backend owns source validation, normalized page images, SQLite persistence, the extraction
-pipeline, AI/document-processing boundaries, revisions, publication, and future voice sessions.
-TypeScript is limited to the browser UI, polling transport, browser speech fallback, and thin API proxies.
+pipeline, AI/document-processing boundaries, revisions, publication, narration preparation, and secure
+voice-provider credentials. TypeScript is limited to the browser UI, polling transport, ElevenLabs'
+real-time browser session, audio playback, and thin API proxies.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, data flow, API routes, and the integration backlog.
 
@@ -55,6 +57,29 @@ Copy `.env.example` to `.env.local` when an integration is ready. Keep `EXTRACTI
 for the local pipeline agents. The uploader automatically enables model choices for every configured
 provider: `OPENAI_API_KEY` for OpenAI, `GEMINI_API_KEY` for Google Gemini, and `XAI_API_KEY` for Grok.
 Choices without a configured key remain visible but disabled.
+
+Voice features use ElevenLabs while math narration preparation uses a text LLM.
+Add these values to `.env.local`, then restart both servers:
+
+```bash
+ELEVENLABS_API_KEY=your_key
+ELEVENLABS_AGENT_ID=your_agent_id
+ELEVENLABS_VOICE_ID=JBFqnCBsd6RMkjVDRZzb
+ELEVENLABS_TTS_MODEL=eleven_v3
+ELEVENLABS_STT_MODEL=scribe_v2
+NARRATION_MODEL=gpt-6-luna
+```
+
+The full-note and click-to-read modes use ElevenLabs when `ELEVENLABS_API_KEY`
+is configured. Set `OPENAI_API_KEY` as well to have the narration LLM rewrite raw notation into an
+explicit spoken script; otherwise the reviewed spoken-math fields are used as a
+deterministic fallback. If ElevenLabs is unconfigured or its TTS request fails,
+the reader automatically speaks the same math-aware script with the browser's
+default `speechSynthesis` voice. This makes click-to-read formula testing work in
+development mode without an ElevenLabs account. Real-time conversation additionally requires an
+ElevenLabs Agent with prompt overrides enabled and its ID in
+`ELEVENLABS_AGENT_ID`. The Python API creates the signed connection URL so the
+ElevenLabs key is never sent to the browser.
 
 The uploader uses the persisted `/documents` workflow. The lower-level transcription API remains
 available for testing providers directly:

@@ -1,55 +1,252 @@
 "use client";
 
-import { useState } from "react";
-import { ChevronLeft, ChevronRight, Download, Play, Square } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ConversationProvider, useConversation } from "@elevenlabs/react";
+import { AudioLines, Download, Headphones, Mic, PhoneOff, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { parseReaderCommand } from "@/lib/voice/commands";
-import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
+import type { SemanticNote } from "@/lib/domain/note";
 
-function speechFor(block: NoteBlock) { return block.math?.spoken ?? block.altText ?? block.text; }
+export type FormulaReadRequest = { index: number; token: number } | null;
 
-export function ReaderControls({ note, index, setIndex }: { note: SemanticNote; index: number; setIndex: (index: number) => void }) {
+type ReaderControlsProps = {
+  note: SemanticNote;
+  formulaRequest: FormulaReadRequest;
+  onFormulaReadHandled: () => void;
+};
+
+function documentContext(note: SemanticNote) {
+  return note.blocks.map((block, index) => {
+    const fields = [`Item ${index + 1}; type: ${block.kind}`, block.title, block.text];
+    if (block.math) fields.push(`Formula LaTeX: ${block.math.latex}`, `Spoken form: ${block.math.spoken}`);
+    if (block.altText) fields.push(`Visual description: ${block.altText}`);
+    return fields.filter(Boolean).join("\n");
+  }).join("\n\n");
+}
+
+function browserSpeechChunks(script: string) {
+  const withPauses = script.replace(/<break[^>]*\/>/gi, "[pause]");
+  return withPauses
+    .split(/\[pause\]|\n{2,}/i)
+    .flatMap((section) => section.match(/[^.!?;]+[.!?;]?/g) ?? [])
+    .map((chunk) => chunk.replace(/\[[^\]]+\]/g, "").trim())
+    .filter(Boolean);
+}
+
+function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: ReaderControlsProps) {
   const [speaking, setSpeaking] = useState(false);
-  const [command, setCommand] = useState("");
-  const [message, setMessage] = useState("Ready");
-  const current = note.blocks[index];
+  const [loadingNarration, setLoadingNarration] = useState<"full" | "formula" | null>(null);
+  const [agentStarting, setAgentStarting] = useState(false);
+  const [message, setMessage] = useState("Choose a listening mode.");
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
+  const browserSpeechRunRef = useRef(0);
+  const browserPauseRef = useRef<number | null>(null);
+  const context = useMemo(() => documentContext(note), [note]);
+  const conversation = useConversation({
+    onConnect: () => { setAgentStarting(false); setMessage("Voice conversation connected."); },
+    onDisconnect: () => { setAgentStarting(false); setMessage("Voice conversation ended."); },
+    onError: (error) => { setAgentStarting(false); setMessage(`Voice agent error: ${String(error)}`); },
+  });
 
-  function speak(block = current) {
-    if (!("speechSynthesis" in window)) { setMessage("Speech is unavailable in this browser."); return; }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(speechFor(block));
-    utterance.rate = 0.88; utterance.onend = () => setSpeaking(false);
-    setSpeaking(true); setMessage(`Reading ${block.kind}`); window.speechSynthesis.speak(utterance);
+  useEffect(() => () => {
+    audioRef.current?.pause();
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    browserSpeechRunRef.current += 1;
+    if (browserPauseRef.current !== null) window.clearTimeout(browserPauseRef.current);
+    window.speechSynthesis?.cancel();
+  }, []);
+
+  useEffect(() => {
+    if (!formulaRequest) return;
+    void generateNarration(formulaRequest.index);
+    onFormulaReadHandled();
+    // The token represents a deliberate formula click; callbacks are intentionally excluded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formulaRequest?.token]);
+
+  function stopNarration(updateMessage = true) {
+    audioRef.current?.pause();
+    audioRef.current = null;
+    if (audioUrlRef.current) URL.revokeObjectURL(audioUrlRef.current);
+    audioUrlRef.current = null;
+    browserSpeechRunRef.current += 1;
+    if (browserPauseRef.current !== null) window.clearTimeout(browserPauseRef.current);
+    browserPauseRef.current = null;
+    window.speechSynthesis?.cancel();
+    setSpeaking(false);
+    if (updateMessage) setMessage("Narration stopped.");
   }
 
-  function stop() { window.speechSynthesis?.cancel(); setSpeaking(false); setMessage("Stopped"); }
-  function move(delta: number) { const next = Math.max(0, Math.min(note.blocks.length - 1, index + delta)); setIndex(next); setMessage(`Moved to item ${next + 1}`); }
+  function speakWithBrowser(script: string, mode: "full" | "formula") {
+    if (!("speechSynthesis" in window)) {
+      throw new Error("Neither ElevenLabs nor browser speech is available.");
+    }
+    const chunks = browserSpeechChunks(script);
+    if (!chunks.length) throw new Error("The narration script is empty.");
+    const run = ++browserSpeechRunRef.current;
+    let position = 0;
+
+    const speakNext = () => {
+      if (run !== browserSpeechRunRef.current) return;
+      if (position >= chunks.length) {
+        setSpeaking(false);
+        setMessage("Browser narration finished.");
+        return;
+      }
+      const utterance = new SpeechSynthesisUtterance(chunks[position]);
+      utterance.rate = mode === "formula" ? 0.78 : 0.9;
+      utterance.onend = () => {
+        position += 1;
+        browserPauseRef.current = window.setTimeout(speakNext, mode === "formula" ? 450 : 280);
+      };
+      utterance.onerror = () => {
+        if (run !== browserSpeechRunRef.current) return;
+        setSpeaking(false);
+        setMessage("Browser speech stopped before finishing.");
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+
+    setSpeaking(true);
+    setMessage("ElevenLabs is unavailable — using the default browser voice.");
+    speakNext();
+  }
+
+  async function generateNarration(blockIndex?: number) {
+    stopNarration(false);
+    const mode = blockIndex === undefined ? "full" : "formula";
+    setLoadingNarration(mode);
+    setMessage(mode === "full" ? "Writing the full math narration…" : "Preparing this formula for speech…");
+    try {
+      const scriptResponse = await fetch("/api/voice/narration-script", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ note, blockIndex }),
+      });
+      const scriptPayload = await scriptResponse.json() as { script?: string; error?: string };
+      if (!scriptResponse.ok || !scriptPayload.script) {
+        throw new Error(scriptPayload.error ?? "Narration script generation failed.");
+      }
+      setMessage("Generating ElevenLabs MP3…");
+      let fallbackStarted = false;
+      const runBrowserFallback = () => {
+        if (fallbackStarted) return;
+        fallbackStarted = true;
+        stopNarration(false);
+        speakWithBrowser(scriptPayload.script!, mode);
+      };
+      try {
+        const speechResponse = await fetch("/api/voice/speech", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: scriptPayload.script }),
+        });
+        if (!speechResponse.ok) throw new Error("ElevenLabs is unavailable.");
+        const audioUrl = URL.createObjectURL(await speechResponse.blob());
+        audioUrlRef.current = audioUrl;
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+        audio.onended = () => {
+          setSpeaking(false);
+          setMessage("Narration finished.");
+          URL.revokeObjectURL(audioUrl);
+          audioUrlRef.current = null;
+        };
+        audio.onerror = runBrowserFallback;
+        await audio.play();
+        setSpeaking(true);
+        setMessage(mode === "full" ? "Reading the full notes." : "Reading the selected formula.");
+      } catch {
+        runBrowserFallback();
+      }
+    } catch (reason) {
+      setMessage(reason instanceof Error ? reason.message : "Narration generation failed.");
+    } finally {
+      setLoadingNarration(null);
+    }
+  }
+
+  async function startConversation() {
+    setAgentStarting(true);
+    setMessage("Connecting the note-aware voice agent…");
+    try {
+      const response = await fetch("/api/voice/agent", { cache: "no-store" });
+      const payload = await response.json() as { signedUrl?: string; error?: string };
+      if (!response.ok || !payload.signedUrl) {
+        throw new Error(payload.error ?? "Voice agent is not configured.");
+      }
+      conversation.startSession({
+        signedUrl: payload.signedUrl,
+        connectionType: "websocket",
+        overrides: {
+          agent: {
+            firstMessage: "I have the complete notes. What would you like me to explain or read?",
+            prompt: {
+              prompt: `You are EigenScribe, an accessible math notes voice guide. Use only the supplied document context. Answer questions about any part of the document and follow navigation requests such as “read the numerator” or “go back to the last formula.” Speak notation explicitly: multiplication as “times,” exponents as “to the power of,” and grouping as “open parenthesis” and “close parenthesis.” Pause naturally at formula boundaries. Never invent missing content.\n\nCOMPLETE DOCUMENT CONTEXT\nTitle: ${note.title}\n${context}`,
+            },
+          },
+        },
+      });
+    } catch (reason) {
+      setAgentStarting(false);
+      setMessage(reason instanceof Error ? reason.message : "Could not connect the voice agent.");
+    }
+  }
+
   function download() {
     const body = note.blocks.map((block) => `<section><h2>${block.title ?? block.kind}</h2><p>${block.text}</p>${block.math ? `<p aria-label="${block.math.spoken}">${block.math.latex}</p>` : ""}${block.altText ? `<p><strong>Visual description:</strong> ${block.altText}</p>` : ""}</section>`).join("");
     const blob = new Blob([`<!doctype html><html lang="en"><meta charset="utf-8"><title>${note.title}</title><main><h1>${note.title}</h1>${body}</main></html>`], { type: "text/html" });
-    const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = `${note.slug}.html`; link.click(); URL.revokeObjectURL(url); setMessage("Downloaded accessible HTML");
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${note.slug}.html`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMessage("Downloaded accessible HTML.");
   }
 
-  function runCommand() {
-    const parsed = parseReaderCommand(command);
-    if (parsed.type === "next") move(1);
-    else if (parsed.type === "previous") move(-1);
-    else if (parsed.type === "read-current" || parsed.type === "read-again") speak();
-    else if (parsed.type === "describe-visual") { const visual = note.blocks.findIndex((block) => block.kind === "graph" || block.kind === "diagram"); if (visual >= 0) { setIndex(visual); speak(note.blocks[visual]); } else setMessage("No visual found"); }
-    else if (parsed.type === "download") download();
-    else setMessage(`Command not recognized: ${parsed.transcript}`);
-    setCommand("");
-  }
+  const connected = conversation.status === "connected";
+  const conversationLabel = connected
+    ? (conversation.isSpeaking ? "Agent is speaking" : "Agent is listening")
+    : "Start real-time voice interaction";
 
   return (
     <aside className="reader-controls" aria-label="Reader controls">
-      <p className="overline">Listening controls</p><h2>Item {index + 1} of {note.blocks.length}</h2>
-      <div className="control-row"><Button size="icon" variant="outline" onClick={() => move(-1)} disabled={index === 0} aria-label="Previous item"><ChevronLeft /></Button><Button size="icon" onClick={() => speaking ? stop() : speak()} aria-label={speaking ? "Stop" : "Read current item"}>{speaking ? <Square /> : <Play />}</Button><Button size="icon" variant="outline" onClick={() => move(1)} disabled={index === note.blocks.length - 1} aria-label="Next item"><ChevronRight /></Button></div>
+      <p className="overline">Listen and interact</p>
+      <section className="voice-mode">
+        <span className="mode-number">1</span>
+        <div><h2>Read full notes</h2><p>Generates one paced MP3, with automatic browser-voice fallback. Longer notes can take a moment.</p></div>
+        <Button onClick={() => speaking ? stopNarration() : void generateNarration()} disabled={loadingNarration !== null || connected}>
+          {loadingNarration === "full" ? <AudioLines className="spin" /> : speaking ? <Square /> : <Headphones />}
+          {loadingNarration === "full" ? "Generating…" : speaking ? "Stop" : "Generate and read"}
+        </Button>
+      </section>
+
+      <section className="voice-mode">
+        <span className="mode-number">2</span>
+        <div><h2>Read one formula</h2><p>Click any blue formula. The math LLM adds explicit operators, grouping, powers, and pauses; development mode uses your browser voice.</p></div>
+        {loadingNarration === "formula" && <span className="inline-loading"><AudioLines className="spin" /> Preparing formula…</span>}
+      </section>
+
+      <section className="voice-mode">
+        <span className="mode-number">3</span>
+        <div><h2>Talk about the notes</h2><p>The live ElevenLabs agent listens and answers with the entire document as context.</p></div>
+        {connected ? (
+          <Button variant="outline" onClick={() => conversation.endSession()}><PhoneOff /> End conversation</Button>
+        ) : (
+          <Button variant="outline" onClick={() => void startConversation()} disabled={agentStarting || loadingNarration !== null}>
+            <Mic /> {agentStarting ? "Connecting…" : "Start conversation"}
+          </Button>
+        )}
+        {connected && <span className={`conversation-state ${conversation.isSpeaking ? "speaking" : "listening"}`}>{conversationLabel}</span>}
+      </section>
+
       <p className="reader-status" aria-live="polite">{message}</p>
-      <label>Command<input value={command} onChange={(event) => setCommand(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") runCommand(); }} placeholder="Try “describe the graph”" /></label>
-      <Button variant="outline" onClick={runCommand} disabled={!command}>Run command</Button>
       <Button variant="ghost" onClick={download}><Download /> Download HTML</Button>
-      <p className="architecture-note">This command surface and the future realtime voice agent use the same navigation actions.</p>
     </aside>
   );
+}
+
+export function ReaderControls(props: ReaderControlsProps) {
+  return <ConversationProvider><ReaderControlsInner {...props} /></ConversationProvider>;
 }
