@@ -9,8 +9,10 @@ export const metadata: Metadata = {
     "codex-preview": "development",
   },
   icons: {
-    icon: "/favicon.svg",
-    shortcut: "/favicon.svg",
+    // Bump this content-derived URL whenever the public favicon changes so browsers
+    // cannot keep displaying an older cached version after deployment.
+    icon: "/favicon.svg?v=63b5f910",
+    shortcut: "/favicon.svg?v=63b5f910",
   },
 };
 
