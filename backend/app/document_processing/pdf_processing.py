@@ -147,6 +147,7 @@ class TranscribedRegion(BaseModel):
     kind: Literal[
         "handwriting",
         "printed_text",
+        "heading",
         "equation",
         "diagram",
         "graph",

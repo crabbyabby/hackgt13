@@ -257,7 +257,11 @@ def create_app(data_dir=None, converter=None):
             semantic = {
                 'id': block['id'],
                 'kind': kind,
-                'text': block['text'] or block['description'] or block['spokenText'],
+                'text': (
+                    block['spokenText']
+                    if kind in ('heading', 'paragraph')
+                    else block['text'] or block['description'] or block['spokenText']
+                ),
                 'confidence': block.get('confidence', 0),
                 'needsReview': block['needsReview'],
                 'interpretations': block.get('interpretations', []),
@@ -305,6 +309,19 @@ def create_app(data_dir=None, converter=None):
             'updatedAt': doc['updatedAt'],
             'schemaVersion': 1,
         }
+
+    @app.get('/notes/{slug}')
+    def note_by_slug(slug: str):
+        for document in store().list():
+            document_slug = ''.join(
+                character if character.isalnum() else '-'
+                for character in document['title'].lower()
+            )
+            document_slug = '-'.join(filter(None, document_slug.split('-'))) or document['id']
+            if document_slug == slug and document['status'] in ('needs_review', 'ready'):
+                logger.info('Reader note resolved | slug=%s document=%s', slug, document['id'])
+                return semantic_note(document['id'])
+        raise NotFound()
 
     @app.get('/documents/{doc_id}/source')
     def source(doc_id: str):
