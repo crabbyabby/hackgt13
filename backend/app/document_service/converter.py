@@ -8,6 +8,7 @@ from time import perf_counter
 from PIL import Image
 
 from backend.app.core.container import pdf_processing_service
+from backend.app.document_processing.pdf_processing import best_reading
 
 logger = logging.getLogger('eigenscribe.converter')
 
@@ -62,7 +63,7 @@ def convert_pages(
     blocks = []
     for page in transcription.pages:
         for region in page.regions:
-            best = max(region.interpretations, key=lambda candidate: candidate.confidence)
+            best = best_reading(region)
             block_type = {
                 'equation': 'equation',
                 'diagram': 'diagram',

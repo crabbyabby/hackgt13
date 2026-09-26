@@ -25,6 +25,11 @@ class Settings:
     max_voice_upload_bytes: int = int(os.getenv("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))
     narration_model: str = os.getenv("NARRATION_MODEL", "gpt-6-luna")
     openai_realtime_model: str = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
+    # Transcription is perception, not reasoning: the model reads marks off a page rather
+    # than solving the mathematics. Reasoning tokens are generated before any output and
+    # are paid for in full latency, so the default is deliberately low.
+    # One of: none, minimal, low, medium, high.
+    transcription_effort: str = os.getenv("TRANSCRIPTION_EFFORT", "low")
     max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 
 

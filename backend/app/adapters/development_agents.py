@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from backend.app.document_processing.pdf_processing import best_reading
 from backend.app.domain.inputs import PipelineContext
 from backend.app.domain.models import (
     BlockKind,
@@ -51,7 +52,7 @@ class DevelopmentLayoutAgent:
             }
             for page in context.source.transcription.pages:
                 for region in page.regions:
-                    best = max(region.interpretations, key=lambda candidate: candidate.confidence)
+                    best = best_reading(region)
                     block_kind = kind_map.get(region.kind, BlockKind.PARAGRAPH)
                     context.blocks.append(
                         NoteBlock(

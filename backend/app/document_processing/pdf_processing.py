@@ -162,14 +162,19 @@ class TranscribedRegion(BaseModel):
     color: str
     visualStyle: str
     relationships: list[str]
-    interpretations: list[InterpretationCandidate] = Field(min_length=1)
+    # Empty when the reading is unambiguous. Alternates are only worth their latency
+    # and token cost where the model is actually uncertain.
+    interpretations: list[InterpretationCandidate] = Field(default_factory=list)
     confidence: float = Field(ge=0, le=1)
     needsReview: bool
 
 
 class PageTranscription(BaseModel):
     pageNumber: int = Field(ge=1)
-    rawTranscription: str
+    # Fallback only. When regions are produced this stays empty: emitting the page as
+    # both prose and structured regions doubles output tokens, and output length is the
+    # dominant term in generation latency.
+    rawTranscription: str = ""
     readingOrder: list[str]
     regions: list[TranscribedRegion]
     unassignedMarks: list[str]
@@ -194,6 +199,42 @@ class PdfTranscription(PdfTranscriptionPayload):
     confidenceBasis: Literal["model_self_reported", "development_fixture"]
 
 
+# Each provider spells "spend less time deliberating" differently. Transcription is a
+# perception task, so a low setting is the right default: reasoning tokens are emitted
+# before any output and are paid for in full request latency.
+_OPENAI_EFFORT = {"none": "none", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high"}
+_GEMINI_THINKING_LEVEL = {
+    "none": "MINIMAL", "minimal": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH",
+}
+
+
+def _openai_reasoning(effort: str) -> dict | None:
+    mapped = _OPENAI_EFFORT.get((effort or "").lower())
+    return {"effort": mapped} if mapped else None
+
+
+def _gemini_thinking(effort: str):
+    mapped = _GEMINI_THINKING_LEVEL.get((effort or "").lower())
+    return types.ThinkingConfig(thinking_level=mapped) if mapped else None
+
+
+def best_reading(region: TranscribedRegion) -> InterpretationCandidate:
+    """The most likely reading of a region.
+
+    `interpretations` is empty for unambiguous regions, so callers must not assume a
+    candidate exists. The verbatim reading stands in, carrying the region's own
+    confidence rather than inventing one.
+    """
+    if region.interpretations:
+        return max(region.interpretations, key=lambda candidate: candidate.confidence)
+    return InterpretationCandidate(
+        reading=region.verbatim,
+        latex=region.verbatim if region.kind == "equation" else None,
+        confidence=region.confidence,
+        evidence="Single unambiguous reading; no alternates were reported.",
+    )
+
+
 class PdfProcessor(Protocol):
     async def process(self, *, filename: str, content: bytes, model: str | None = None) -> PdfTranscription:
         ...
@@ -210,23 +251,29 @@ titles, prose, equations, derivation steps, matrices, subscripts, superscripts, 
 arrows, circles, underlines, highlights, colors, labels, marginal notes, diagrams, graphs, tables,
 axes, legends, doodles that may carry meaning, and isolated marks.
 
-For each region, preserve an exact visual/verbatim reading separately from normalized interpretations.
-Never silently repair spelling, notation, or mathematical reasoning in `verbatim`. For mathematics,
-put normalized mathematical candidates in `latex`. If a mark is unclear, write `[illegible]` or an
-equally precise placeholder in the verbatim text, set needsReview, and include every plausible reading
-as a separate interpretation with its own confidence and brief visible evidence. Do not collapse
-arrows, colors, highlights, spatial grouping, or crossed-out content into ordinary prose; record their
-relationships and visual style. Do not invent invisible content. Include stray or unassigned marks.
+For each region, preserve an exact visual/verbatim reading in `verbatim`. Never silently repair
+spelling, notation, or mathematical reasoning there. For mathematics, put the normalized reading in
+the region's `latex`. Do not collapse arrows, colors, highlights, spatial grouping, or crossed-out
+content into ordinary prose; record their relationships and visual style. Do not invent invisible
+content. Include stray or unassigned marks.
 
-`rawTranscription` must be an exhaustive, reading-order-preserving page record. Region IDs must be
-unique within the document, and `readingOrder` must reference those IDs. Confidence values are your
+Use `interpretations` only where a reading is genuinely ambiguous. When a mark is unclear, write
+`[illegible]` or an equally precise placeholder in `verbatim`, set `needsReview`, and list each
+plausible reading with its own confidence and brief visible evidence. When a region is unambiguous,
+leave `interpretations` empty rather than restating the obvious reading.
+
+Emit each page ONCE. Put the content in `regions`, and leave `rawTranscription` empty. Only when you
+cannot segment a page into regions at all, leave `regions` empty and put the whole page into
+`rawTranscription` instead. Never fill both. Region IDs must be unique within the document, and
+`regions` must already be in reading order. Confidence values are your
 self-assessment from 0 to 1 and must be lower when handwriting, notation, layout, or relationships are
 ambiguous. The output will be reviewed by a person and then transformed into semantic learning content.
 """.strip()
 
 
 class OpenAIPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str) -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+        self.effort = effort
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required to use OpenAI PDF models.")
         self.client = AsyncOpenAI(api_key=api_key)
@@ -260,6 +307,7 @@ class OpenAIPdfProcessor:
                     }
                 ],
                 text_format=PdfTranscriptionPayload,
+                **({"reasoning": reasoning} if (reasoning := _openai_reasoning(self.effort)) else {}),
             )
         except Exception as exc:  # SDK/network boundary; normalized for the API layer.
             raise PdfProcessingError(f"OpenAI PDF transcription failed: {exc}") from exc
@@ -279,7 +327,8 @@ class OpenAIPdfProcessor:
 
 
 class GeminiPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str) -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+        self.effort = effort
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required to use Gemini PDF models.")
         self.client = genai.Client(api_key=api_key)
@@ -300,6 +349,7 @@ class GeminiPdfProcessor:
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
                     response_schema=PdfTranscriptionPayload,
+                    thinking_config=_gemini_thinking(self.effort),
                 ),
             )
             payload = PdfTranscriptionPayload.model_validate_json(response.text)
@@ -317,7 +367,8 @@ class GeminiPdfProcessor:
 
 
 class GrokPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str) -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+        self.effort = effort
         if not api_key:
             raise ValueError("XAI_API_KEY is required to use Grok PDF models.")
         self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
@@ -349,6 +400,7 @@ class GrokPdfProcessor:
                     }
                 ],
                 text_format=PdfTranscriptionPayload,
+                **({"reasoning": reasoning} if (reasoning := _openai_reasoning(self.effort)) else {}),
             )
             payload = response.output_parsed
             if payload is None:
