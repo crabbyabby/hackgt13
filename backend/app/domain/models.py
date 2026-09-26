@@ -48,13 +48,53 @@ class MathVariable(BaseModel):
     meaning: str
 
 
+class MathIntegral(BaseModel):
+    integrand: MathExpressionNode
+    variable: str
+    lowerBound: MathExpressionNode | None = None
+    upperBound: MathExpressionNode | None = None
+
+
+class MathDerivative(BaseModel):
+    expression: MathExpressionNode
+    variable: str
+    order: int = Field(default=1, ge=1)
+
+
+class MathExpressionNode(BaseModel):
+    """A recursively navigable part of a mathematical expression."""
+
+    latex: str
+    spoken: str | None = None
+    numerator: MathExpressionNode | None = None
+    denominator: MathExpressionNode | None = None
+    radicand: MathExpressionNode | None = None
+    rootIndex: MathExpressionNode | None = None
+    base: MathExpressionNode | None = None
+    exponent: MathExpressionNode | None = None
+    matrixRows: list[list[MathExpressionNode]] = Field(default_factory=list)
+    matrixColumns: list[list[MathExpressionNode]] = Field(default_factory=list)
+    alignedSteps: list[MathExpressionNode] = Field(default_factory=list)
+    integral: MathIntegral | None = None
+    derivative: MathDerivative | None = None
+
+
 class MathNode(BaseModel):
     latex: str
     spoken: str
     label: str
     variables: list[MathVariable] = Field(default_factory=list)
-    # TODO(math): Add a navigable expression tree for numerator/denominator,
-    # roots, exponents, matrix rows/columns, and aligned derivation steps.
+    numerator: MathExpressionNode | None = None
+    denominator: MathExpressionNode | None = None
+    radicand: MathExpressionNode | None = None
+    rootIndex: MathExpressionNode | None = None
+    base: MathExpressionNode | None = None
+    exponent: MathExpressionNode | None = None
+    matrixRows: list[list[MathExpressionNode]] = Field(default_factory=list)
+    matrixColumns: list[list[MathExpressionNode]] = Field(default_factory=list)
+    alignedSteps: list[MathExpressionNode] = Field(default_factory=list)
+    integral: MathIntegral | None = None
+    derivative: MathDerivative | None = None
 
 
 class NoteInterpretation(BaseModel):
