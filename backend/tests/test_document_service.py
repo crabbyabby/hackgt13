@@ -80,3 +80,29 @@ def test_uncompilable_notation_is_forced_back_to_review(tmp_path):
     assert "did not compile" in block["math"]["mathmlError"]
     # The converter said this block was fine. The deterministic gate overrides it.
     assert block["needsReview"] is True
+
+
+def test_flattened_matrix_notation_is_sent_back_to_review(tmp_path):
+    """Compiling is necessary but not sufficient: wrong structure must not publish."""
+    def flattening_converter(page_images, **_kwargs):
+        return {
+            "title": "Flattened notation",
+            "blocks": [{
+                "id": "block-001", "type": "equation", "page": 1,
+                "text": "", "latex": "[3; -2; -1; 0]", "description": "",
+                "spokenText": "three, minus two, minus one, zero",
+                "needsReview": False, "reviewReason": "",
+            }],
+        }
+
+    with TestClient(create_app(data_dir=tmp_path, converter=flattening_converter)) as client:
+        upload = client.post("/documents", files={"file": ("notes.png", _png_bytes(), "image/png")})
+        note = client.get(f"/documents/{upload.json()['id']}/semantic-note").json()
+
+    block = note["blocks"][0]
+    # It compiled, so mathml exists and mathmlError is clear...
+    assert block["math"]["mathml"] is not None
+    assert block["math"]["mathmlError"] is None
+    # ...but the structure is wrong, so it still must not pass as reviewed.
+    assert block["math"]["structureWarning"] is not None
+    assert block["needsReview"] is True

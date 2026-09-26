@@ -16,6 +16,7 @@ It produces three things from one LaTeX string:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 import latex2mathml.converter
@@ -58,6 +59,17 @@ class MathCompilation:
     tree: MathExpressionNode | None
     ok: bool
     error: str | None = None
+    # Set when the LaTeX parses but describes the wrong mathematics, which a syntax
+    # check alone cannot see. Compiling is necessary but not sufficient.
+    structureWarning: str | None = None
+
+
+# A matrix written with a real environment; anything else loses its two dimensions.
+_MATRIX_ENVIRONMENT = re.compile(r"\\begin\{(p|b|B|v|V|small)?matrix\*?\}|\\begin\{array\}|\\\\")
+# The observed failure mode: brackets enclosing either an augmentation rule, or two or
+# more row separators, e.g. "[3; -2; -1; 0]" and "[3 2 0 1 3 | 5; ...]". One semicolon
+# inside brackets is ordinary notation such as an ordered pair, so it is left alone.
+_FLATTENED_MATRIX = re.compile(r"[\[(](?:[^\[\]()]*\|[^\[\]()]*|[^\[\]()]*;[^\[\]()]*;[^\[\]()]*)[\])]", re.DOTALL)
 
 
 def compile_math(latex: str) -> MathCompilation:
@@ -72,7 +84,32 @@ def compile_math(latex: str) -> MathCompilation:
         return MathCompilation(
             latex=source, mathml=None, tree=None, ok=False, error=f"LaTeX did not compile to MathML: {reason}"
         )
-    return MathCompilation(latex=source, mathml=mathml, tree=build_expression_tree(source), ok=True)
+    return MathCompilation(
+        latex=source,
+        mathml=mathml,
+        tree=build_expression_tree(source),
+        ok=True,
+        structureWarning=detect_flattened_matrix(source),
+    )
+
+
+def detect_flattened_matrix(latex: str) -> str | None:
+    """Flag a matrix or vector written as an inline list instead of a real environment.
+
+    `[3; -2; -1; 0]` is valid LaTeX and compiles to valid MathML, so the compile gate
+    passes it. But it carries no rows or columns, so a screen reader announces a run of
+    numbers rather than a column vector: the notation parses and still states the wrong
+    mathematics. Structure has to be checked separately from syntax.
+    """
+    source = (latex or "").strip()
+    if not source or _MATRIX_ENVIRONMENT.search(source):
+        return None
+    if _FLATTENED_MATRIX.search(source):
+        return (
+            "Notation looks like a matrix or vector flattened into an inline list. "
+            "It should use a matrix environment so rows and columns survive."
+        )
+    return None
 
 
 def speak_latex(latex: str) -> str:

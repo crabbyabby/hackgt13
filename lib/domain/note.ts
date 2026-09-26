@@ -24,6 +24,8 @@ export type MathNode = {
   /** Accessible notation. Absent when `latex` failed to compile server-side. */
   mathml?: string;
   mathmlError?: string;
+  /** Set when the notation compiles but describes the wrong structure. */
+  structureWarning?: string;
   tree?: MathExpressionNode;
 };
 

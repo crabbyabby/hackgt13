@@ -244,7 +244,7 @@ class PdfProcessingError(RuntimeError):
     pass
 
 
-_TRANSCRIPTION_INSTRUCTIONS = """
+_TRANSCRIPTION_INSTRUCTIONS = r"""
 You are the loss-aware transcription stage for EigenScribe. Transcribe the complete PDF before any
 semantic rewriting. Account for every visible handwritten or printed mark on every page, including
 titles, prose, equations, derivation steps, matrices, subscripts, superscripts, crossed-out work,
@@ -257,23 +257,48 @@ the region's `latex`. Do not collapse arrows, colors, highlights, spatial groupi
 content into ordinary prose; record their relationships and visual style. Do not invent invisible
 content. Include stray or unassigned marks.
 
+LaTeX must preserve two-dimensional structure. Write every column vector and matrix with a real
+environment: \begin{bmatrix}3\\-2\\-1\\0\end{bmatrix}, and an augmented matrix as
+\begin{array}{ccccc|c} ... \end{array} with the vertical rule where the partition is drawn. NEVER
+flatten a vector or matrix into an inline list such as [3; -2; -1; 0] or [3 2 0 1 3 | 5; ...]: a
+screen reader reads that as a sentence of numbers rather than as a matrix, which reports the wrong
+mathematics. Keep a scalar coefficient in the same expression as the vector it multiplies, rather
+than emitting the coefficients as separate loose text.
+
 Use `interpretations` only where a reading is genuinely ambiguous. When a mark is unclear, write
 `[illegible]` or an equally precise placeholder in `verbatim`, set `needsReview`, and list each
 plausible reading with its own confidence and brief visible evidence. When a region is unambiguous,
 leave `interpretations` empty rather than restating the obvious reading.
 
-Emit each page ONCE. Put the content in `regions`, and leave `rawTranscription` empty. Only when you
-cannot segment a page into regions at all, leave `regions` empty and put the whole page into
-`rawTranscription` instead. Never fill both. Region IDs must be unique within the document, and
+Region IDs must be unique within the document, and
 `regions` must already be in reading order. Confidence values are your
 self-assessment from 0 to 1 and must be lower when handwriting, notation, layout, or relationships are
 ambiguous. The output will be reviewed by a person and then transformed into semantic learning content.
 """.strip()
 
+_RAW_PASS_INSTRUCTION = """
+First write `rawTranscription` for each page: a complete, reading-order-preserving prose reading of
+everything on it. Then produce `regions` from that reading. The prose pass grounds the structured
+pass; do not skip it.
+""".strip()
+
+_NO_RAW_PASS_INSTRUCTION = """
+Put each page's content in `regions` and leave `rawTranscription` empty. Only when a page cannot be
+segmented into regions at all, leave `regions` empty and put the whole page in `rawTranscription`.
+""".strip()
+
+
+def transcription_instructions(*, raw_pass: bool) -> str:
+    """The prompt, with or without the grounding prose pass."""
+    extra = _RAW_PASS_INSTRUCTION if raw_pass else _NO_RAW_PASS_INSTRUCTION
+    return f"{_TRANSCRIPTION_INSTRUCTIONS}\n\n{extra}"
+
 
 class OpenAIPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
+                 raw_pass: bool = True) -> None:
         self.effort = effort
+        self.raw_pass = raw_pass
         if not api_key:
             raise ValueError("OPENAI_API_KEY is required to use OpenAI PDF models.")
         self.client = AsyncOpenAI(api_key=api_key)
@@ -288,7 +313,7 @@ class OpenAIPdfProcessor:
             response = await self.client.responses.parse(
                 model=selected_model,
                 store=False,
-                instructions=_TRANSCRIPTION_INSTRUCTIONS,
+                instructions=transcription_instructions(raw_pass=self.raw_pass),
                 input=[
                     {
                         "role": "user",
@@ -327,8 +352,10 @@ class OpenAIPdfProcessor:
 
 
 class GeminiPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
+                 raw_pass: bool = True) -> None:
         self.effort = effort
+        self.raw_pass = raw_pass
         if not api_key:
             raise ValueError("GEMINI_API_KEY is required to use Gemini PDF models.")
         self.client = genai.Client(api_key=api_key)
@@ -343,7 +370,7 @@ class GeminiPdfProcessor:
                 model=selected_model,
                 contents=[
                     types.Part.from_bytes(data=content, mime_type="application/pdf"),
-                    _TRANSCRIPTION_INSTRUCTIONS,
+                    transcription_instructions(raw_pass=self.raw_pass),
                     "Return the complete transcription as JSON matching the supplied schema.",
                 ],
                 config=types.GenerateContentConfig(
@@ -367,8 +394,10 @@ class GeminiPdfProcessor:
 
 
 class GrokPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "low") -> None:
+    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
+                 raw_pass: bool = True) -> None:
         self.effort = effort
+        self.raw_pass = raw_pass
         if not api_key:
             raise ValueError("XAI_API_KEY is required to use Grok PDF models.")
         self.client = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
@@ -386,7 +415,7 @@ class GrokPdfProcessor:
             response = await self.client.responses.parse(
                 model=selected_model,
                 store=False,
-                instructions=_TRANSCRIPTION_INSTRUCTIONS,
+                instructions=transcription_instructions(raw_pass=self.raw_pass),
                 input=[
                     {
                         "role": "user",

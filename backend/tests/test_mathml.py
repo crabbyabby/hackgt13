@@ -73,3 +73,41 @@ def test_compilation_is_deterministic():
     second = compile_math(r"\frac{1}{2}")
 
     assert first.mathml == second.mathml
+
+
+def test_flattened_vector_compiles_but_is_flagged_as_wrong_structure():
+    """`[3; -2; -1; 0]` is valid LaTeX, so the compile gate alone lets it through.
+
+    It carries no rows, so a screen reader announces a run of numbers instead of a
+    column vector. Syntax and structure are separate checks.
+    """
+    result = compile_math(r"[3; -2; -1; 0]")
+
+    assert result.ok is True
+    assert result.mathml is not None
+    assert "<mtable" not in result.mathml
+    assert result.structureWarning is not None
+    assert "flattened" in result.structureWarning
+
+
+def test_flattened_augmented_matrix_is_flagged():
+    result = compile_math(r"[3 2 0 1 3 | 5; -2 4 -16 2 3 | 2]")
+
+    assert result.structureWarning is not None
+
+
+def test_real_matrix_environments_are_not_flagged():
+    for latex in (
+        r"\begin{bmatrix}3\\-2\\-1\\0\end{bmatrix}",
+        r"\begin{array}{ccccc|c}3&2&0&1&3&5\\0&1&0&0&0&1\end{array}",
+    ):
+        result = compile_math(latex)
+        assert result.ok is True
+        assert "<mtable" in result.mathml
+        assert result.structureWarning is None
+
+
+def test_ordinary_notation_is_not_flagged():
+    """One separator inside brackets is ordinary notation, not a flattened matrix."""
+    for latex in (r"A x = \lambda x", r"f(x) = (a; b)", r"\frac{a}{b}", r"\{x \mid x > 0\}"):
+        assert compile_math(latex).structureWarning is None

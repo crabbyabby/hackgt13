@@ -276,7 +276,9 @@ def create_app(data_dir=None, converter=None):
                     'mathmlError': compiled.error,
                     **({'tree': compiled.tree.model_dump(exclude_none=True)} if compiled.tree else {}),
                 }
-                if not compiled.ok:
+                if compiled.structureWarning:
+                    semantic['math']['structureWarning'] = compiled.structureWarning
+                if not compiled.ok or compiled.structureWarning:
                     semantic['needsReview'] = True
             elif kind == 'diagram':
                 semantic['altText'] = block['description']

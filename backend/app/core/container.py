@@ -26,15 +26,15 @@ pdf_processors = {
 }
 if settings.openai_api_key:
     pdf_processors[AiProvider.OPENAI] = OpenAIPdfProcessor(
-        api_key=settings.openai_api_key, default_model=settings.openai_pdf_model, effort=settings.transcription_effort
+        api_key=settings.openai_api_key, default_model=settings.openai_pdf_model, effort=settings.transcription_effort, raw_pass=settings.transcription_raw_pass
     )
 if settings.gemini_api_key:
     pdf_processors[AiProvider.GOOGLE] = GeminiPdfProcessor(
-        api_key=settings.gemini_api_key, default_model=settings.gemini_pdf_model, effort=settings.transcription_effort
+        api_key=settings.gemini_api_key, default_model=settings.gemini_pdf_model, effort=settings.transcription_effort, raw_pass=settings.transcription_raw_pass
     )
 if settings.xai_api_key:
     pdf_processors[AiProvider.XAI] = GrokPdfProcessor(
-        api_key=settings.xai_api_key, default_model=settings.xai_pdf_model, effort=settings.transcription_effort
+        api_key=settings.xai_api_key, default_model=settings.xai_pdf_model, effort=settings.transcription_effort, raw_pass=settings.transcription_raw_pass
     )
 pdf_processing_service = PdfProcessingService(processors=pdf_processors)
 publication_service = PublicationService(notes=repository)
