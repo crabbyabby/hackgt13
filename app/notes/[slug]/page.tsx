@@ -1,0 +1,31 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { AppShell } from "@/components/app-shell";
+import { ReaderControls } from "@/components/reader-controls";
+import { createDemoNote } from "@/lib/demo-note";
+import { loadDraft } from "@/lib/domain/storage";
+import type { SemanticNote } from "@/lib/domain/note";
+
+export default function ReaderPage() {
+  const [note, setNote] = useState<SemanticNote | null>(null);
+  const [index, setIndex] = useState(0);
+  useEffect(() => setNote(loadDraft() ?? { ...createDemoNote(), status: "published" }), []);
+  if (!note) return <AppShell step="reader"><main className="single-column"><p>Loading note…</p></main></AppShell>;
+
+  return (
+    <AppShell step="reader">
+      <main className="reader-layout">
+        <article className="published-note">
+          <header><p className="overline">{note.course}</p><h1>{note.title}</h1><p>Accessible interactive note · {note.blocks.length} items</p></header>
+          <div className="published-blocks">{note.blocks.map((block, blockIndex) => <section key={block.id} className={blockIndex === index ? "current-block" : ""} onClick={() => setIndex(blockIndex)} tabIndex={0} aria-current={blockIndex === index ? "true" : undefined}>
+            <span className="kind-label">{block.kind}</span>{block.title && <h2>{block.title}</h2>}<p>{block.text}</p>
+            {block.math && <div className="reader-equation" role="math" aria-label={block.math.spoken}>{block.math.latex}</div>}
+            {block.altText && <div className="visual-description"><strong>Visual description</strong><p>{block.altText}</p></div>}
+          </section>)}</div>
+        </article>
+        <ReaderControls note={note} index={index} setIndex={setIndex} />
+      </main>
+    </AppShell>
+  );
+}
