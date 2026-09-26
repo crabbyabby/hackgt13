@@ -10,9 +10,11 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadF
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from backend.app.document_processing.mathml import compile_math
+
 from .converter import convert_pages
 from .models import EditDocument, ExtractedDocument, RevisionRequest
-from .pages import prepare_pages
+from .pages import prepare_document
 from .storage import Conflict, NotFound, Store, now
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
@@ -58,7 +60,8 @@ def create_app(data_dir=None, converter=None):
         try:
             doc = store().get(doc_id)
             source = directory(doc_id) / ('original.' + doc['sourceType'])
-            images = prepare_pages(source, doc['sourceType'])
+            prepared = prepare_document(source, doc['sourceType'])
+            images = prepared.imagePaths
             stage = 'conversion'
             if uses_shared_ai_converter:
                 result = convert(
@@ -76,8 +79,12 @@ def create_app(data_dir=None, converter=None):
             def done(current):
                 current.update(
                     title=draft.title, blocks=[b.model_dump() for b in draft.blocks],
-                    pages=[{'number': n, 'imageUrl': f'/documents/{doc_id}/pages/{n}'}
-                           for n in range(1, len(images) + 1)],
+                    pages=[{'number': page.number,
+                            'imageUrl': f'/documents/{doc_id}/pages/{page.number}',
+                            'widthPx': page.widthPx, 'heightPx': page.heightPx,
+                            'renderedDpi': page.renderedDpi,
+                            'hasEmbeddedText': page.hasEmbeddedText}
+                           for page in prepared.pages],
                     status='needs_review', error=None,
                 )
             store().update(doc_id, done)
@@ -175,12 +182,21 @@ def create_app(data_dir=None, converter=None):
                 'interpretations': block.get('interpretations', []),
             }
             if kind == 'equation':
+                # Compiling to MathML is both the accessible rendering and an objective
+                # check on the transcription: LaTeX that will not parse cannot be trusted
+                # or published, whatever confidence the model reported.
+                compiled = compile_math(block['latex'])
                 semantic['math'] = {
                     'latex': block['latex'],
                     'spoken': block['spokenText'],
                     'label': 'Handwritten equation',
                     'variables': [],
+                    'mathml': compiled.mathml,
+                    'mathmlError': compiled.error,
+                    **({'tree': compiled.tree.model_dump(exclude_none=True)} if compiled.tree else {}),
                 }
+                if not compiled.ok:
+                    semantic['needsReview'] = True
             elif kind == 'diagram':
                 semantic['altText'] = block['description']
             blocks.append(semantic)

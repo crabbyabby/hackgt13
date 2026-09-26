@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
 import { AudioLines, Download, Headphones, Mic, PhoneOff, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { SemanticNote } from "@/lib/domain/note";
+import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
 
 export type FormulaReadRequest = { index: number; token: number } | null;
 
@@ -194,8 +194,18 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
   }
 
   function download() {
-    const body = note.blocks.map((block) => `<section><h2>${block.title ?? block.kind}</h2><p>${block.text}</p>${block.math ? `<p aria-label="${block.math.spoken}">${block.math.latex}</p>` : ""}${block.altText ? `<p><strong>Visual description:</strong> ${block.altText}</p>` : ""}</section>`).join("");
-    const blob = new Blob([`<!doctype html><html lang="en"><meta charset="utf-8"><title>${note.title}</title><main><h1>${note.title}</h1>${body}</main></html>`], { type: "text/html" });
+    // Note content is author text, not markup: escaping keeps a stray "<" or "&" from
+    // producing an invalid document (WCAG 2.1 SC 4.1.1) or injecting markup.
+    const escape = (value: string) => value.replace(/[&<>"']/g, (character) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] as string));
+    // Equations ship as MathML so the downloaded file is readable by assistive technology
+    // on its own. Unverified notation degrades to labelled source rather than silent LaTeX.
+    const formula = (math: NonNullable<NoteBlock["math"]>) =>
+      math.mathml && math.mathml.trim().startsWith("<math")
+        ? `<figure>${math.mathml}<figcaption class="sr-only">${escape(math.spoken)}</figcaption></figure>`
+        : `<p><code>${escape(math.latex)}</code> <em>(unverified notation: ${escape(math.spoken)})</em></p>`;
+    const body = note.blocks.map((block) => `<section><h2>${escape(block.title ?? block.kind)}</h2><p>${escape(block.text)}</p>${block.math ? formula(block.math) : ""}${block.altText ? `<p><strong>Visual description:</strong> ${escape(block.altText)}</p>` : ""}</section>`).join("");
+    const blob = new Blob([`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(note.title)}</title><style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style></head><body><main><h1>${escape(note.title)}</h1>${body}</main></body></html>`], { type: "text/html" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;

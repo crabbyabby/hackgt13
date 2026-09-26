@@ -66,6 +66,7 @@ class MathExpressionNode(BaseModel):
 
     latex: str
     spoken: str | None = None
+    mathml: str | None = None
     numerator: MathExpressionNode | None = None
     denominator: MathExpressionNode | None = None
     radicand: MathExpressionNode | None = None
@@ -84,6 +85,10 @@ class MathNode(BaseModel):
     spoken: str
     label: str
     variables: list[MathVariable] = Field(default_factory=list)
+    # Rendered accessible notation. `mathml` is None when `latex` failed to compile,
+    # which forces the owning block back to human review.
+    mathml: str | None = None
+    mathmlError: str | None = None
     numerator: MathExpressionNode | None = None
     denominator: MathExpressionNode | None = None
     radicand: MathExpressionNode | None = None

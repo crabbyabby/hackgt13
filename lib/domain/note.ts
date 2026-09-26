@@ -1,11 +1,30 @@
 export type SourceKind = "pdf" | "image";
 export type BlockKind = "heading" | "paragraph" | "equation" | "graph" | "diagram" | "annotation";
 
+export type MathExpressionNode = {
+  latex: string;
+  spoken?: string;
+  mathml?: string;
+  numerator?: MathExpressionNode;
+  denominator?: MathExpressionNode;
+  radicand?: MathExpressionNode;
+  rootIndex?: MathExpressionNode;
+  base?: MathExpressionNode;
+  exponent?: MathExpressionNode;
+  matrixRows?: MathExpressionNode[][];
+  matrixColumns?: MathExpressionNode[][];
+  alignedSteps?: MathExpressionNode[];
+};
+
 export type MathNode = {
   latex: string;
   spoken: string;
   label: string;
   variables: Array<{ symbol: string; meaning: string }>;
+  /** Accessible notation. Absent when `latex` failed to compile server-side. */
+  mathml?: string;
+  mathmlError?: string;
+  tree?: MathExpressionNode;
 };
 
 export type NoteBlock = {
