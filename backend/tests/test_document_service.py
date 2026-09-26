@@ -35,6 +35,10 @@ def test_document_workflow_uses_persistence_and_shared_converter(tmp_path):
         assert note["source"]["aiModel"] == "development-fixture"
         assert len(note["blocks"][0]["interpretations"]) == 2
 
+        slug_response = client.get(f"/notes/{note['slug']}")
+        assert slug_response.status_code == 200
+        assert slug_response.json()["id"] == document_id
+
 
 def test_published_equations_carry_mathml_and_a_navigable_tree(tmp_path):
     """The development fixture emits a valid equation, so the note must carry MathML."""

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ConversationProvider, useConversation } from "@elevenlabs/react";
-import { AudioLines, Download, Headphones, Mic, PhoneOff, Square } from "lucide-react";
+import { AudioLines, Download, Headphones, Mic, Minimize2, PhoneOff, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
 
@@ -36,6 +36,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
   const [speaking, setSpeaking] = useState(false);
   const [loadingNarration, setLoadingNarration] = useState<"full" | "formula" | null>(null);
   const [agentStarting, setAgentStarting] = useState(false);
+  const [collapsed, setCollapsed] = useState(true);
   const [message, setMessage] = useState("Choose a listening mode.");
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
@@ -220,9 +221,23 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     ? (conversation.isSpeaking ? "Agent is speaking" : "Agent is listening")
     : "Start real-time voice interaction";
 
+  if (collapsed) {
+    return (
+      <aside className="reader-controls reader-controls-collapsed" aria-label="Listening controls">
+        <Button onClick={() => setCollapsed(false)} aria-expanded="false">
+          <Headphones /> Listen &amp; interact
+          {connected && <span className="live-dot" aria-label="Voice conversation connected" />}
+        </Button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="reader-controls" aria-label="Reader controls">
-      <p className="overline">Listen and interact</p>
+      <div className="reader-controls-header">
+        <p className="overline">Listen and interact</p>
+        <Button size="icon" variant="ghost" onClick={() => setCollapsed(true)} aria-label="Collapse listening controls" aria-expanded="true"><Minimize2 /></Button>
+      </div>
       <section className="voice-mode">
         <span className="mode-number">1</span>
         <div><h2>Read full notes</h2><p>Generates one paced MP3, with automatic browser-voice fallback. Longer notes can take a moment.</p></div>
@@ -234,7 +249,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
 
       <section className="voice-mode">
         <span className="mode-number">2</span>
-        <div><h2>Read one formula</h2><p>Click any blue formula. The math LLM adds explicit operators, grouping, powers, and pauses; development mode uses your browser voice.</p></div>
+        <div><h2>Read one formula</h2><p>Click any yellow math card. The math LLM adds explicit operators, grouping, powers, and pauses; development mode uses your browser voice.</p></div>
         {loadingNarration === "formula" && <span className="inline-loading"><AudioLines className="spin" /> Preparing formula…</span>}
       </section>
 

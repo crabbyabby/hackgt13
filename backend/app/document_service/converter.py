@@ -65,6 +65,7 @@ def convert_pages(
         for region in page.regions:
             best = best_reading(region)
             block_type = {
+                'heading': 'heading',
                 'equation': 'equation',
                 'diagram': 'diagram',
                 'graph': 'diagram',

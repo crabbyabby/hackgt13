@@ -1,33 +1,55 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useParams } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ReaderControls, type FormulaReadRequest } from "@/components/reader-controls";
 import { MathFormula } from "@/components/math-formula";
 import { createDemoNote } from "@/lib/demo-note";
 import { loadDraft } from "@/lib/domain/storage";
 import type { SemanticNote } from "@/lib/domain/note";
+import { buildReaderItems } from "@/lib/reader/presentation";
 
 export default function ReaderPage() {
   const [note, setNote] = useState<SemanticNote | null>(null);
   const [index, setIndex] = useState(0);
   const [formulaRequest, setFormulaRequest] = useState<FormulaReadRequest>(null);
+  const { slug } = useParams<{ slug: string }>();
   useEffect(() => {
-    const timer = window.setTimeout(() => setNote(loadDraft() ?? { ...createDemoNote(), status: "published" }), 0);
-    return () => window.clearTimeout(timer);
-  }, []);
+    let active = true;
+    const draft = loadDraft();
+    const draftTimer = window.setTimeout(() => {
+      if (active && draft?.slug === slug) setNote(draft);
+    }, 0);
+    fetch(`/api/notes/${encodeURIComponent(slug)}`, { cache: "no-store" })
+      .then((response) => response.ok ? response.json() as Promise<SemanticNote> : Promise.reject())
+      .then((published) => { if (active) setNote(published); })
+      .catch(() => {
+        if (active && draft?.slug !== slug) setNote({ ...createDemoNote(), status: "published" });
+      });
+    return () => { active = false; window.clearTimeout(draftTimer); };
+  }, [slug]);
   if (!note) return <AppShell step="reader"><main className="single-column"><p>Loading note…</p></main></AppShell>;
+  const readerItems = buildReaderItems(note);
 
   return (
     <AppShell step="reader">
       <main className="reader-layout">
         <article className="published-note">
-          <header><p className="overline">{note.course}</p><h1>{note.title}</h1><p>Accessible interactive note · {note.blocks.length} items</p></header>
-          <div className="published-blocks">{note.blocks.map((block, blockIndex) => <section key={block.id} className={blockIndex === index ? "current-block" : ""} onClick={() => setIndex(blockIndex)} tabIndex={0} aria-current={blockIndex === index ? "true" : undefined}>
-            <span className="kind-label">{block.kind}</span>{block.title && <h2>{block.title}</h2>}<p>{block.text}</p>
-            {block.math && <MathFormula math={block.math} onPlay={() => { setIndex(blockIndex); setFormulaRequest({ index: blockIndex, token: Date.now() }); }} />}
-            {block.altText && <div className="visual-description"><strong>Visual description</strong><p>{block.altText}</p></div>}
-          </section>)}</div>
+          <header><p className="overline">{note.course}</p><h1>{note.title}</h1><p>Accessible interactive notes · Click any equation to listen</p></header>
+          <div className="published-content">{readerItems.map((item) => {
+            if (item.type === "heading") return <h2 key={`heading-${item.sourceIndex}`}>{item.text}</h2>;
+            if (item.type === "prose") return <p key={`prose-${item.sourceIndices[0]}`} className="note-paragraph" aria-label={`Paragraph. ${item.text}`}>{item.text}</p>;
+            if (item.type === "visual") return <figure key={item.block.id} className="visual-description"><figcaption>Visual description</figcaption><p>{item.block.altText ?? item.block.text}</p></figure>;
+            const selected = item.sourceIndex === index;
+            return <MathFormula
+              key={item.block.id}
+              math={item.block.math!}
+              label={item.label}
+              selected={selected}
+              onPlay={() => { setIndex(item.sourceIndex); setFormulaRequest({ index: item.sourceIndex, token: Date.now() }); }}
+            />;
+          })}</div>
         </article>
         <ReaderControls note={note} formulaRequest={formulaRequest} onFormulaReadHandled={() => setFormulaRequest(null)} />
       </main>
