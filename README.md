@@ -34,6 +34,11 @@ npm run dev
 
 Open <http://localhost:5173>. FastAPI documentation is available at <http://localhost:8000/docs>.
 
+The API terminal logs every upload stage, model dispatch, ten-second wait
+heartbeat, bounded partial result, schema conversion, narration request, and
+provider fallback. Set `LOG_LEVEL=DEBUG` in `.env.local` for document-status
+poll reads as well. `MODEL_PROGRESS_INTERVAL_SECONDS` controls the heartbeat.
+
 ## Current workflow
 
 1. Upload a PDF or image, or open the development fixture.

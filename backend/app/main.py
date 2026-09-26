@@ -1,3 +1,7 @@
+from backend.app.core.logging import configure_logging
+
+configure_logging()
+
 from backend.app.api.routes import extraction_router, notes_router, pdf_processing_router, voice_router
 from backend.app.document_service.main import create_app
 

@@ -1,9 +1,11 @@
 """Local hackathon backend. Run one Uvicorn worker; converter is injectable."""
+import logging
 import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
+from time import perf_counter
 from typing import Annotated
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
@@ -18,6 +20,7 @@ from .pages import prepare_document
 from .storage import Conflict, NotFound, Store, now
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+logger = logging.getLogger('eigenscribe.documents')
 
 
 def create_app(data_dir=None, converter=None):
@@ -57,12 +60,36 @@ def create_app(data_dir=None, converter=None):
 
     def process(doc_id):
         stage = 'page preparation'
+        started = perf_counter()
+        logger.info('Document job start | document=%s', doc_id)
         try:
+            store().update(doc_id, lambda current: current.update(processingStage='page_preparation'))
             doc = store().get(doc_id)
             source = directory(doc_id) / ('original.' + doc['sourceType'])
+            logger.info(
+                'Stage 1/3 page preparation start | document=%s source_type=%s',
+                doc_id,
+                doc['sourceType'],
+            )
             prepared = prepare_document(source, doc['sourceType'])
             images = prepared.imagePaths
+            logger.info(
+                'Stage 1/3 page preparation complete | document=%s normalized_pages=%d '
+                'dpi=%s text_layer_pages=%d elapsed=%.2fs',
+                doc_id,
+                len(images),
+                prepared.pages[0].renderedDpi if prepared.pages else 0,
+                len(prepared.embeddedTextByPage),
+                perf_counter() - started,
+            )
             stage = 'conversion'
+            store().update(doc_id, lambda current: current.update(processingStage='ai_conversion'))
+            logger.info(
+                'Stage 2/3 AI conversion start | document=%s provider=%s model=%s; waiting for model…',
+                doc_id,
+                doc.get('aiProvider', 'development'),
+                doc.get('aiModel', 'development-fixture'),
+            )
             if uses_shared_ai_converter:
                 result = convert(
                     images,
@@ -71,7 +98,27 @@ def create_app(data_dir=None, converter=None):
                 )
             else:
                 result = convert(images)
+            logger.info(
+                'Stage 2/3 AI conversion complete | document=%s title=%r blocks=%d elapsed=%.2fs',
+                doc_id,
+                result.get('title'),
+                len(result.get('blocks', [])),
+                perf_counter() - started,
+            )
+            for position, block in enumerate(result.get('blocks', [])[:5], start=1):
+                logger.info(
+                    'Partial block %d/%d | document=%s type=%s confidence=%s text=%r latex=%r',
+                    position,
+                    len(result.get('blocks', [])),
+                    doc_id,
+                    block.get('type'),
+                    block.get('confidence'),
+                    str(block.get('text', ''))[:180],
+                    str(block.get('latex', ''))[:180],
+            )
             stage = 'converter output validation'
+            store().update(doc_id, lambda current: current.update(processingStage='schema_validation'))
+            logger.info('Stage 3/3 schema validation start | document=%s', doc_id)
             draft = ExtractedDocument.model_validate(result)
             if any(b.page > len(images) for b in draft.blocks):
                 raise ValueError('Converter referenced a nonexistent page.')
@@ -86,15 +133,28 @@ def create_app(data_dir=None, converter=None):
                             'hasEmbeddedText': page.hasEmbeddedText}
                            for page in prepared.pages],
                     status='needs_review', error=None,
+                    processingStage='complete',
                 )
             store().update(doc_id, done)
-        except Exception:  # noqa: BLE001 - job boundary converts failures to a safe status
+            logger.info(
+                'Document job complete | document=%s status=needs_review blocks=%d elapsed=%.2fs',
+                doc_id,
+                len(draft.blocks),
+                perf_counter() - started,
+            )
+        except Exception:
+            logger.exception(
+                'Document job failed | document=%s stage=%s elapsed=%.2fs',
+                doc_id,
+                stage,
+                perf_counter() - started,
+            )
             # Never publish provider exception text: it may contain keys or private inputs.
             message = {'page preparation': 'Could not read this file. Use a valid PNG/JPEG or an unencrypted PDF of 1–3 pages.',
                        'conversion': 'Converter failed. Check the converter setup and retry.',
                        'converter output validation': 'Converter returned invalid document data. Check the shared schema.'}[stage]
             def failed(current):
-                current.update(status='failed', error=message)
+                current.update(status='failed', error=message, processingStage='failed')
             store().update(doc_id, failed)
 
     @app.get('/health')
@@ -109,6 +169,13 @@ def create_app(data_dir=None, converter=None):
         model: Annotated[str, Form()] = 'development-fixture',
     ):
         doc_id = 'doc-' + uuid.uuid4().hex
+        logger.info(
+            'Upload start | document=%s filename=%r provider=%s model=%s',
+            doc_id,
+            file.filename,
+            provider,
+            model,
+        )
         folder = root / 'files' / doc_id
         folder.mkdir(parents=True)
         pending = folder / 'incoming'
@@ -135,6 +202,7 @@ def create_app(data_dir=None, converter=None):
                 'id': doc_id,
                 'title': 'Processing document',
                 'status': 'processing',
+                'processingStage': 'queued',
                 'revision': 1,
                 'pages': [],
                 'blocks': [],
@@ -148,6 +216,12 @@ def create_app(data_dir=None, converter=None):
                 'updatedAt': now(),
             }
             store().create(doc)
+            logger.info(
+                'Upload accepted | document=%s source_type=%s bytes=%d; background job queued',
+                doc_id,
+                kind,
+                size,
+            )
         except Exception:
             shutil.rmtree(folder, ignore_errors=True)
             raise
@@ -162,7 +236,14 @@ def create_app(data_dir=None, converter=None):
 
     @app.get('/documents/{doc_id}')
     def get_document(doc_id: str):
-        return store().get(doc_id)
+        document = store().get(doc_id)
+        logger.debug(
+            'Document status read | document=%s status=%s revision=%s',
+            doc_id,
+            document['status'],
+            document['revision'],
+        )
+        return document
 
     @app.get('/documents/{doc_id}/semantic-note')
     def semantic_note(doc_id: str):
@@ -271,7 +352,7 @@ def create_app(data_dir=None, converter=None):
         def change(doc):
             if doc['status'] != 'failed':
                 raise Conflict('Only failed documents can be retried.')
-            doc.update(status='processing', error=None)
+            doc.update(status='processing', error=None, processingStage='queued')
         doc = store().update(doc_id, change, body.expectedRevision)
         background_tasks.add_task(process, doc_id)
         return {'id': doc_id, 'status': doc['status'], 'revision': doc['revision']}

@@ -73,5 +73,5 @@ class Store:
                 doc = json.loads(body)
                 if doc['status'] == 'processing':
                     doc.update(status='failed', error='Processing interrupted by server restart. Retry conversion.',
-                               revision=doc['revision'] + 1, updatedAt=now())
+                               processingStage='failed', revision=doc['revision'] + 1, updatedAt=now())
                     db.execute('UPDATE documents SET body=? WHERE id=?', (json.dumps(doc), doc_id))
