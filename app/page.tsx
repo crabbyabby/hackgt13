@@ -84,7 +84,7 @@ export default function UploadPage() {
     }
   }
 
-  function openArchitectureDemo() {
+  function openSampleNote() {
     saveDraft(createDemoNote());
     router.push("/review");
   }
@@ -112,7 +112,7 @@ export default function UploadPage() {
           </label>
           {error && <p className="error-message" role="alert">{error}</p>}
           {state === "running" && <p className="processing-message" aria-live="polite">{progress}</p>}
-          <div className="action-row"><Button size="lg" disabled={!file || state === "running"} onClick={analyze}>{state === "running" ? "Analyzing…" : "Analyze notes"}</Button><Button size="lg" variant="ghost" onClick={openArchitectureDemo}>Open development fixture</Button></div>
+          <div className="action-row"><Button size="lg" disabled={!file || state === "running"} onClick={analyze}>{state === "running" ? "Analyzing…" : "Analyze notes"}</Button><Button size="lg" variant="ghost" onClick={openSampleNote}>Open Gram-Schmidt sample</Button></div>
         </section>
         <aside className="secondary-panel"><h2>Extraction pipeline</h2><p>Each stage has its own contract and can be replaced independently.</p><PipelineList running={state === "running"} /></aside>
       </main>

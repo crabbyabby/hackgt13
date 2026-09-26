@@ -49,10 +49,12 @@ export function MathFormula({
         ) : (
           <div className="equation-notation equation-unverified">
             <MathExpression latex={math.latex} spoken={math.spoken} />
-            <p className="equation-warning" role="status">
-              This notation could not be verified as MathML and is shown using a visual fallback.
-              {math.mathmlError ? ` ${math.mathmlError}` : ""}
-            </p>
+            {math.mathmlError && (
+              <p className="equation-warning" role="status">
+                This notation could not be verified as MathML and is shown using a visual fallback.
+                {` ${math.mathmlError}`}
+              </p>
+            )}
           </div>
         )}
       </div>

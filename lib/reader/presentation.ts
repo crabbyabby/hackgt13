@@ -98,7 +98,9 @@ export function buildReaderItems(note: SemanticNote): ReaderItem[] {
     if (isExplicitHeading(block, text)) {
       flushProse();
       exampleMode = isExampleHeading(text);
-      const heading = isExampleHeading(text) ? text.replace(/^ex\.?\s*/i, "Example ") : text;
+      const heading = /^ex\.?\s+\d/i.test(text)
+        ? text.replace(/^ex\.?\s+/i, "Example ")
+        : text;
       items.push({ type: "heading", text: completeSentence(heading).replace(/\.$/, ""), sourceIndex });
       return;
     }

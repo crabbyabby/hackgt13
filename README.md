@@ -41,7 +41,7 @@ poll reads as well. `MODEL_PROGRESS_INTERVAL_SECONDS` controls the heartbeat.
 
 ## Current workflow
 
-1. Upload a PDF or image, or open the development fixture.
+1. Upload a PDF or image, or open the built-in Gram-Schmidt semantic sample.
 2. Review semantic blocks, math notation, spoken math, and visual descriptions.
 3. Generate a reader link.
 4. Generate a full-note MP3, click a formula for paced math narration, start a

@@ -26,10 +26,13 @@ type ConversationOptions = {
 
 export function useGrokConversation(options: ConversationOptions) {
   const optionsRef = useRef(options);
-  optionsRef.current = options;
   const sessionRef = useRef<GrokRealtimeSession | null>(null);
   const [status, setStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [isSpeaking, setIsSpeaking] = useState(false);
+
+  useEffect(() => {
+    optionsRef.current = options;
+  }, [options]);
 
   const endSession = useCallback(() => {
     const active = sessionRef.current;
