@@ -50,3 +50,6 @@ next-env.d.ts
 /outputs/
 /work/
 /data/
+
+# TypeScript incremental build cache
+*.tsbuildinfo
