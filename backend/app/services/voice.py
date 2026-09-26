@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 import re
 from dataclasses import dataclass
+from time import perf_counter
 from typing import Any
 
 import httpx
 from openai import AsyncOpenAI
 
+from backend.app.core.logging import preview
 from backend.app.domain.models import BlockKind, NoteBlock, SemanticNote
+
+logger = logging.getLogger("eigenscribe.voice")
+PROGRESS_INTERVAL_SECONDS = float(os.getenv("MODEL_PROGRESS_INTERVAL_SECONDS", "10"))
 
 
 class VoiceProviderError(RuntimeError):
@@ -42,7 +50,16 @@ class ElevenLabsVoiceService:
     async def synthesize(self, text: str) -> bytes:
         api_key = self._require_key()
         request_client = self.client or httpx.AsyncClient(timeout=60)
+        started = perf_counter()
+        logger.info(
+            "TTS start | provider=elevenlabs model=%s voice=%s chars=%d preview=%r",
+            self.tts_model,
+            self.voice_id,
+            len(text),
+            preview(text),
+        )
         try:
+            logger.info("TTS waiting for ElevenLabs response…")
             response = await request_client.post(
                 f"https://api.elevenlabs.io/v1/text-to-speech/{self.voice_id}",
                 params={"output_format": "mp3_44100_128"},
@@ -54,8 +71,15 @@ class ElevenLabsVoiceService:
                 },
             )
             response.raise_for_status()
+            logger.info(
+                "TTS complete | bytes=%d elapsed=%.2fs content_type=%s",
+                len(response.content),
+                perf_counter() - started,
+                response.headers.get("content-type", "unknown"),
+            )
             return response.content
         except httpx.HTTPError as exc:
+            logger.exception("TTS failed after %.2fs", perf_counter() - started)
             raise VoiceProviderError(f"ElevenLabs speech generation failed: {exc}") from exc
         finally:
             if self.client is None:
@@ -64,7 +88,16 @@ class ElevenLabsVoiceService:
     async def transcribe(self, *, filename: str, content: bytes, content_type: str) -> dict:
         api_key = self._require_key()
         request_client = self.client or httpx.AsyncClient(timeout=90)
+        started = perf_counter()
+        logger.info(
+            "STT start | provider=elevenlabs model=%s file=%r bytes=%d content_type=%s",
+            self.stt_model,
+            filename,
+            len(content),
+            content_type,
+        )
         try:
+            logger.info("STT waiting for ElevenLabs transcription…")
             response = await request_client.post(
                 "https://api.elevenlabs.io/v1/speech-to-text",
                 headers={"xi-api-key": api_key},
@@ -73,12 +106,19 @@ class ElevenLabsVoiceService:
             )
             response.raise_for_status()
             payload = response.json()
+            logger.info(
+                "STT complete | elapsed=%.2fs language=%s partial_result=%r",
+                perf_counter() - started,
+                payload.get("language_code", "unknown"),
+                preview(payload.get("text", "")),
+            )
             return {
                 "text": payload.get("text", "").strip(),
                 "languageCode": payload.get("language_code"),
                 "languageProbability": payload.get("language_probability"),
             }
         except (httpx.HTTPError, ValueError) as exc:
+            logger.exception("STT failed after %.2fs", perf_counter() - started)
             raise VoiceProviderError(f"ElevenLabs transcription failed: {exc}") from exc
         finally:
             if self.client is None:
@@ -89,7 +129,10 @@ class ElevenLabsVoiceService:
         if not agent_id:
             raise VoiceProviderUnavailable("Configure ELEVENLABS_AGENT_ID in .env.local.")
         request_client = self.client or httpx.AsyncClient(timeout=30)
+        started = perf_counter()
+        logger.info("Voice agent auth start | agent=%s", agent_id)
         try:
+            logger.info("Voice agent auth waiting for ElevenLabs signed URL…")
             response = await request_client.get(
                 "https://api.elevenlabs.io/v1/convai/conversation/get-signed-url",
                 params={"agent_id": agent_id},
@@ -99,8 +142,10 @@ class ElevenLabsVoiceService:
             signed_url = response.json().get("signed_url")
             if not signed_url:
                 raise VoiceProviderError("ElevenLabs returned no signed conversation URL.")
+            logger.info("Voice agent auth complete | elapsed=%.2fs", perf_counter() - started)
             return str(signed_url)
         except (httpx.HTTPError, ValueError) as exc:
+            logger.exception("Voice agent auth failed after %.2fs", perf_counter() - started)
             raise VoiceProviderError(f"ElevenLabs agent connection failed: {exc}") from exc
         finally:
             if self.client is None:
@@ -126,13 +171,22 @@ class MathNarrationService:
     async def prepare(self, note: SemanticNote, block_index: int | None = None) -> str:
         blocks = note.blocks if block_index is None else [note.blocks[block_index]]
         fallback = self._fallback_script(note, blocks, include_title=block_index is None)
+        scope = "full-note" if block_index is None else f"formula-block-{block_index}"
+        logger.info(
+            "Narration script start | note=%s scope=%s blocks=%d fallback_preview=%r",
+            note.id,
+            scope,
+            len(blocks),
+            preview(fallback),
+        )
         if not self.api_key:
+            logger.info("Narration LLM unavailable; returning deterministic script | scope=%s", scope)
             return fallback
 
         pause = "[pause]" if self.tts_model == "eleven_v3" else '<break time="0.6s" />'
-        scope = "the complete notes document" if block_index is None else "this single formula"
+        prompt_scope = "the complete notes document" if block_index is None else "this single formula"
         source = "\n\n".join(self._block_source(block) for block in blocks)
-        prompt = f"""Convert {scope} into a precise screen-reader narration script.
+        prompt = f"""Convert {prompt_scope} into a precise screen-reader narration script.
 
 Rules:
 - Return only the script that should be spoken. Never use Markdown or raw LaTeX.
@@ -149,12 +203,41 @@ Title: {note.title}
 Semantic source:
 {source}
 """
+        started = perf_counter()
         try:
             client = self.client or AsyncOpenAI(api_key=self.api_key)
-            response = await client.responses.create(model=self.model, input=prompt)
+            logger.info(
+                "Narration LLM request sent | model=%s scope=%s source_chars=%d; waiting for model…",
+                self.model,
+                scope,
+                len(source),
+            )
+            task = asyncio.create_task(client.responses.create(model=self.model, input=prompt))
+            while not task.done():
+                done, _ = await asyncio.wait({task}, timeout=PROGRESS_INTERVAL_SECONDS)
+                if task not in done:
+                    logger.info(
+                        "Narration LLM still processing | model=%s scope=%s elapsed=%.1fs",
+                        self.model,
+                        scope,
+                        perf_counter() - started,
+                    )
+            response = await task
             script = response.output_text.strip()
+            logger.info(
+                "Narration LLM complete | scope=%s elapsed=%.2fs chars=%d partial_result=%r",
+                scope,
+                perf_counter() - started,
+                len(script),
+                preview(script),
+            )
             return script or fallback
-        except Exception:  # noqa: BLE001 - narration remains available without the LLM provider
+        except Exception:
+            logger.exception(
+                "Narration LLM failed after %.2fs; using deterministic script | scope=%s",
+                perf_counter() - started,
+                scope,
+            )
             return fallback
 
     def _fallback_script(
@@ -218,6 +301,12 @@ class NavigationResult:
 
 class VoiceNavigationService:
     def resolve(self, *, note: SemanticNote, index: int, command: str) -> NavigationResult:
+        logger.info(
+            "Navigation command | note=%s index=%d command=%r",
+            note.id,
+            index,
+            preview(command, 160),
+        )
         if not note.blocks:
             return NavigationResult("none", 0, None, "This note has no readable items.")
         current_index = max(0, min(len(note.blocks) - 1, index))

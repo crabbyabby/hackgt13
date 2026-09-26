@@ -1,11 +1,15 @@
 """Adapter from Mackenzie's page contract to the shared AI transcription service."""
 
 import asyncio
+import logging
 from io import BytesIO
+from time import perf_counter
 
 from PIL import Image
 
 from backend.app.core.container import pdf_processing_service
+
+logger = logging.getLogger('eigenscribe.converter')
 
 
 def _pages_to_pdf(page_images: list[str]) -> bytes:
@@ -31,7 +35,13 @@ def convert_pages(
     model: str = 'development-fixture',
 ) -> dict:
     """Transcribe normalized pages and adapt them to the persisted review contract."""
+    started = perf_counter()
+    logger.info(
+        'Converter start | pages=%d provider=%s model=%s', len(page_images), provider, model
+    )
     pdf_content = _pages_to_pdf(page_images)
+    logger.info('Normalized pages assembled | pdf_bytes=%d', len(pdf_content))
+    logger.info('Submitting PDF transcription request; waiting for %s/%s…', provider, model)
     transcription = asyncio.run(
         pdf_processing_service.transcribe(
             filename='normalized-notes.pdf',
@@ -39,6 +49,14 @@ def convert_pages(
             provider=provider,
             model=model,
         )
+    )
+    region_count = sum(len(page.regions) for page in transcription.pages)
+    logger.info(
+        'Transcription returned | title=%r pages=%d regions=%d elapsed=%.2fs',
+        transcription.documentTitle,
+        len(transcription.pages),
+        region_count,
+        perf_counter() - started,
     )
 
     blocks = []
@@ -78,6 +96,15 @@ def convert_pages(
                     ],
                 }
             )
+            logger.info(
+                'Mapped region | page=%d id=%s type=%s confidence=%.3f review=%s reading=%r',
+                page.pageNumber,
+                region.id,
+                block_type,
+                region.confidence,
+                region.needsReview or len(region.interpretations) > 1,
+                best.reading[:220],
+            )
 
         if not page.regions and page.rawTranscription.strip():
             blocks.append(
@@ -98,6 +125,8 @@ def convert_pages(
 
     if not blocks:
         raise ValueError('The transcription did not contain any reviewable content.')
+
+    logger.info('Converter complete | output_blocks=%d elapsed=%.2fs', len(blocks), perf_counter() - started)
 
     return {
         'title': transcription.documentTitle or 'Untitled notes',
