@@ -43,9 +43,13 @@ async def test_formula_fallback_adds_explicit_math_and_pause():
     assert "e to the power of x" in script
 
 
-async def test_full_note_narration_uses_text_llm_when_configured():
+async def test_full_note_narration_uses_text_llm_once_then_persistent_cache(tmp_path):
+    calls = 0
+
     class Responses:
         async def create(self, **kwargs):
+            nonlocal calls
+            calls += 1
             assert kwargs["model"] == "narrator-model"
             assert "Apply the chain rule" in kwargs["input"]
             return SimpleNamespace(output_text="Prepared accessible narration.")
@@ -54,12 +58,22 @@ async def test_full_note_narration_uses_text_llm_when_configured():
         api_key="test-openai-key",
         model="narrator-model",
         client=SimpleNamespace(responses=Responses()),
+        cache_dir=tmp_path / "voice-cache",
     )
 
     assert await service.prepare(note_fixture()) == "Prepared accessible narration."
 
+    restarted_service = MathNarrationService(
+        api_key="test-openai-key",
+        model="narrator-model",
+        client=SimpleNamespace(responses=Responses()),
+        cache_dir=tmp_path / "voice-cache",
+    )
+    assert await restarted_service.prepare(note_fixture()) == "Prepared accessible narration."
+    assert calls == 1
 
-async def test_grok_tts_stt_and_realtime_session_requests():
+
+async def test_grok_tts_stt_and_realtime_session_requests(tmp_path):
     requests: list[httpx.Request] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -82,8 +96,18 @@ async def test_grok_tts_stt_and_realtime_session_requests():
             language="en",
             realtime_model="grok-voice-latest",
             client=client,
+            cache_dir=tmp_path / "voice-cache",
         )
         assert await service.synthesize("hello") == b"mp3-data"
+        restarted_service = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            language="en",
+            realtime_model="grok-voice-latest",
+            client=client,
+            cache_dir=tmp_path / "voice-cache",
+        )
+        assert await restarted_service.synthesize("hello") == b"mp3-data"
         transcript = await service.transcribe(
             filename="command.webm",
             content=b"audio",
@@ -99,3 +123,4 @@ async def test_grok_tts_stt_and_realtime_session_requests():
     assert requests[0].url.path == "/v1/tts"
     assert requests[1].url.path == "/v1/stt"
     assert requests[2].url.path == "/v1/realtime/client_secrets"
+    assert sum(request.url.path == "/v1/tts" for request in requests) == 1

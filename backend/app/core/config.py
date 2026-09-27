@@ -22,6 +22,7 @@ class Settings:
     grok_voice_language: str = os.getenv("GROK_VOICE_LANGUAGE", "en")
     max_voice_upload_bytes: int = int(os.getenv("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))
     narration_model: str = os.getenv("NARRATION_MODEL", "gpt-6-luna")
+    voice_cache_dir: str = os.getenv("VOICE_CACHE_DIR", "data/voice-cache")
     openai_realtime_model: str = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-2.1")
     # Reasoning effort spent before transcription output begins. "low" measurably degraded
     # structure: matrices and column vectors came back flattened to inline lists like
@@ -34,9 +35,7 @@ class Settings:
     transcription_raw_pass: bool = os.getenv("TRANSCRIPTION_RAW_PASS", "true").lower() != "false"
     # A ChatGPT-like comprehension pass before strict JSON structuring. This is slower and
     # costs an extra model call, but prevents a dense page from becoming disconnected OCR fragments.
-    transcription_grounding_pass: bool = (
-        os.getenv("TRANSCRIPTION_GROUNDING_PASS", "true").lower() != "false"
-    )
+    transcription_grounding_pass: bool = os.getenv("TRANSCRIPTION_GROUNDING_PASS", "true").lower() != "false"
     max_upload_bytes: int = int(os.getenv("MAX_UPLOAD_BYTES", str(20 * 1024 * 1024)))
 
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import logging
 import os
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from time import perf_counter
 from typing import Any
 
@@ -30,6 +33,55 @@ TTS_CHAR_LIMIT = 14_000
 GROK_PAUSE = "[pause]"
 
 
+class PersistentVoiceCache:
+    """Content-addressed cache for private narration scripts and generated audio."""
+
+    def __init__(self, root: str | Path | None) -> None:
+        self.root = Path(root).resolve() if root else None
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    @staticmethod
+    def key(namespace: str, payload: object) -> str:
+        encoded = json.dumps(
+            {"namespace": namespace, "payload": payload},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
+
+    def lock(self, key: str) -> asyncio.Lock:
+        return self._locks.setdefault(key, asyncio.Lock())
+
+    def read_bytes(self, namespace: str, key: str, suffix: str) -> bytes | None:
+        path = self._path(namespace, key, suffix)
+        if path is None or not path.is_file():
+            return None
+        content = path.read_bytes()
+        return content or None
+
+    def write_bytes(self, namespace: str, key: str, suffix: str, content: bytes) -> None:
+        path = self._path(namespace, key, suffix)
+        if path is None or not content:
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        temporary.write_bytes(content)
+        os.replace(temporary, path)
+
+    def read_text(self, namespace: str, key: str) -> str | None:
+        content = self.read_bytes(namespace, key, ".txt")
+        return content.decode("utf-8") if content else None
+
+    def write_text(self, namespace: str, key: str, content: str) -> None:
+        self.write_bytes(namespace, key, ".txt", content.encode("utf-8"))
+
+    def _path(self, namespace: str, key: str, suffix: str) -> Path | None:
+        if self.root is None:
+            return None
+        return self.root / namespace / f"{key}{suffix}"
+
+
 class GrokVoiceService:
     """Grok text-to-speech, speech-to-text, and realtime session credentials."""
 
@@ -41,12 +93,14 @@ class GrokVoiceService:
         language: str,
         realtime_model: str,
         client: httpx.AsyncClient | None = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.language = language
         self.realtime_model = realtime_model
         self.client = client
+        self.cache = PersistentVoiceCache(cache_dir)
 
     def _require_key(self) -> str:
         if not self.api_key:
@@ -54,6 +108,27 @@ class GrokVoiceService:
         return self.api_key
 
     async def synthesize(self, text: str) -> bytes:
+        cache_key = self.cache.key(
+            "grok-tts-v1",
+            {"text": text, "voice": self.voice_id, "language": self.language},
+        )
+        cached = self.cache.read_bytes("speech", cache_key, ".mp3")
+        if cached is not None:
+            logger.info("TTS cache hit | provider=grok key=%s bytes=%d", cache_key[:12], len(cached))
+            return cached
+
+        async with self.cache.lock(cache_key):
+            cached = self.cache.read_bytes("speech", cache_key, ".mp3")
+            if cached is not None:
+                logger.info(
+                    "TTS cache hit after wait | provider=grok key=%s bytes=%d",
+                    cache_key[:12],
+                    len(cached),
+                )
+                return cached
+            return await self._synthesize_uncached(text, cache_key)
+
+    async def _synthesize_uncached(self, text: str, cache_key: str) -> bytes:
         api_key = self._require_key()
         request_client = self.client or httpx.AsyncClient(timeout=90)
         chunks = self._speech_chunks(text)
@@ -86,7 +161,10 @@ class GrokVoiceService:
                 perf_counter() - started,
                 "audio/mpeg",
             )
-            return bytes(audio)
+            result = bytes(audio)
+            self.cache.write_bytes("speech", cache_key, ".mp3", result)
+            logger.info("TTS cache stored | provider=grok key=%s", cache_key[:12])
+            return result
         except httpx.HTTPError as exc:
             logger.exception("TTS failed after %.2fs", perf_counter() - started)
             raise VoiceProviderError(f"Grok speech generation failed: {exc}") from exc
@@ -140,7 +218,9 @@ class GrokVoiceService:
         api_key = self._require_key()
         request_client = self.client or httpx.AsyncClient(timeout=30)
         started = perf_counter()
-        logger.info("Voice session start | provider=grok model=%s voice=%s", self.realtime_model, self.voice_id)
+        logger.info(
+            "Voice session start | provider=grok model=%s voice=%s", self.realtime_model, self.voice_id
+        )
         try:
             logger.info("Voice session waiting for Grok client secret…")
             response = await request_client.post(
@@ -201,10 +281,12 @@ class MathNarrationService:
         api_key: str | None,
         model: str,
         client: Any | None = None,
+        cache_dir: str | Path | None = None,
     ) -> None:
         self.api_key = api_key
         self.model = model
         self.client = client
+        self.cache = PersistentVoiceCache(cache_dir)
 
     async def prepare(self, note: SemanticNote, block_index: int | None = None) -> str:
         blocks = note.blocks if block_index is None else [note.blocks[block_index]]
@@ -240,6 +322,54 @@ Title: {note.title}
 Semantic source:
 {source}
 """
+        cache_key = self.cache.key(
+            "math-narration-v1",
+            {
+                "model": self.model,
+                "scope": prompt_scope,
+                "title": note.title,
+                "source": source,
+            },
+        )
+        cached = self.cache.read_text("narration", cache_key)
+        if cached is not None:
+            logger.info(
+                "Narration cache hit | model=%s scope=%s key=%s chars=%d",
+                self.model,
+                scope,
+                cache_key[:12],
+                len(cached),
+            )
+            return cached
+
+        async with self.cache.lock(cache_key):
+            cached = self.cache.read_text("narration", cache_key)
+            if cached is not None:
+                logger.info(
+                    "Narration cache hit after wait | model=%s scope=%s key=%s chars=%d",
+                    self.model,
+                    scope,
+                    cache_key[:12],
+                    len(cached),
+                )
+                return cached
+            return await self._prepare_uncached(
+                prompt=prompt,
+                source=source,
+                scope=scope,
+                fallback=fallback,
+                cache_key=cache_key,
+            )
+
+    async def _prepare_uncached(
+        self,
+        *,
+        prompt: str,
+        source: str,
+        scope: str,
+        fallback: str,
+        cache_key: str,
+    ) -> str:
         started = perf_counter()
         try:
             client = self.client or AsyncOpenAI(api_key=self.api_key)
@@ -268,7 +398,11 @@ Semantic source:
                 len(script),
                 preview(script),
             )
-            return script or fallback
+            if not script:
+                return fallback
+            self.cache.write_text("narration", cache_key, script)
+            logger.info("Narration cache stored | model=%s key=%s", self.model, cache_key[:12])
+            return script
         except Exception:
             logger.exception(
                 "Narration LLM failed after %.2fs; using deterministic script | scope=%s",
@@ -277,9 +411,7 @@ Semantic source:
             )
             return fallback
 
-    def _fallback_script(
-        self, note: SemanticNote, blocks: list[NoteBlock], *, include_title: bool
-    ) -> str:
+    def _fallback_script(self, note: SemanticNote, blocks: list[NoteBlock], *, include_title: bool) -> str:
         parts = [note.title] if include_title else []
         for block in blocks:
             if block.title:
@@ -300,9 +432,7 @@ Semantic source:
         if block.text:
             fields.append(f"Text: {block.text}")
         if block.math:
-            fields.extend(
-                [f"LaTeX: {block.math.latex}", f"Existing spoken form: {block.math.spoken}"]
-            )
+            fields.extend([f"LaTeX: {block.math.latex}", f"Existing spoken form: {block.math.spoken}"])
         if block.altText:
             fields.append(f"Visual description: {block.altText}")
         return "\n".join(fields)
@@ -315,9 +445,7 @@ Semantic source:
             r"\1 times [pause] open parenthesis \2 close parenthesis",
             value,
         )
-        value = re.sub(
-            r"([A-Za-z0-9}])\^\{([^{}]+)\}", r"\1 to the power of \2", value
-        )
+        value = re.sub(r"([A-Za-z0-9}])\^\{([^{}]+)\}", r"\1 to the power of \2", value)
         value = re.sub(r"([A-Za-z0-9}])\^([A-Za-z0-9])", r"\1 to the power of \2", value)
         value = value.replace("+", " plus ").replace("-", " minus ").replace("=", " equals ")
         value = value.replace(r"\cdot", " times ").replace(r"\times", " times ")
@@ -401,10 +529,12 @@ class VoiceNavigationService:
                 return candidate
         return None
 
-    def _read_fraction_part(
-        self, note: SemanticNote, index: int, *, numerator: bool
-    ) -> NavigationResult:
-        target = index if note.blocks[index].math is not None else self._find_previous_formula(note.blocks, index + 1)
+    def _read_fraction_part(self, note: SemanticNote, index: int, *, numerator: bool) -> NavigationResult:
+        target = (
+            index
+            if note.blocks[index].math is not None
+            else self._find_previous_formula(note.blocks, index + 1)
+        )
         if target is None or note.blocks[target].math is None:
             return NavigationResult("none", index, None, "Move to a fraction before requesting that part.")
         fraction = self._first_fraction(note.blocks[target].math.latex)
@@ -415,9 +545,7 @@ class VoiceNavigationService:
             )
         selected = fraction[0] if numerator else fraction[1]
         spoken = self._latex_to_speech(selected)
-        return NavigationResult(
-            "read", target, f"The {part_name} is {spoken}.", f"Reading the {part_name}."
-        )
+        return NavigationResult("read", target, f"The {part_name} is {spoken}.", f"Reading the {part_name}.")
 
     @classmethod
     def _first_fraction(cls, latex: str) -> tuple[str, str] | None:
