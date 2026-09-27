@@ -303,6 +303,13 @@ screen reader reads that as a sentence of numbers rather than as a matrix, which
 mathematics. Keep a scalar coefficient in the same expression as the vector it multiplies, rather
 than emitting the coefficients as separate loose text.
 
+For aligned multi-line equations, put each complete equation on its own row inside an `aligned`
+environment. Put `&` only at the alignment point immediately before an operator such as `=`; it is
+not visible content. After each `\\`, transcribe the complete next left-hand side, including its
+variable before any subscript (for example, write `x_{1}`, never a row beginning with `_1`). Cross-
+check every row against both the visible source and `spoken` reading before returning it. Never
+concatenate separate equations into one row.
+
 Use `interpretations` only where a reading is genuinely ambiguous. When a mark is unclear, write
 `[illegible]` or an equally precise placeholder in `verbatim`, set `needsReview`, and list each
 plausible reading with its own confidence and brief visible evidence. When a region is unambiguous,

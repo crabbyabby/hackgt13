@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronLeft, ChevronRight, Code2, FileText, ListChecks, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/app-shell";
 import { NoteBlockEditor } from "@/components/note-block-editor";
 import { DownloadHtmlButton } from "@/components/download-html-button";
+import { ReviewDocumentPreview } from "@/components/review-document-preview";
 import { createDemoNote } from "@/lib/demo-note";
 import { loadDraft, saveDraft } from "@/lib/domain/storage";
+import { repairAlignedEquations } from "@/lib/reader/repair-equations";
 import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
 import { confirmWithUnreviewedContent } from "@/lib/domain/review-confirmation";
 
@@ -19,10 +22,52 @@ export default function ReviewPage() {
   const [undoMessage, setUndoMessage] = useState("");
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set());
   const [draggedBlockId, setDraggedBlockId] = useState<string | null>(null);
+  const [activeBlockId, setActiveBlockId] = useState<string | null>(null);
+  const [sourcePage, setSourcePage] = useState(1);
+  const [sourceZoom, setSourceZoom] = useState(1);
   const router = useRouter();
   useEffect(() => {
-    const timer = window.setTimeout(() => setNote(loadDraft() ?? createDemoNote()), 0);
-    return () => window.clearTimeout(timer);
+    let active = true;
+    const timer = window.setTimeout(() => {
+      const loaded = loadDraft() ?? createDemoNote();
+      const { note: draft, repairedIds } = repairAlignedEquations(loaded);
+      if (!active) return;
+      setNote(draft);
+      setActiveBlockId(draft.blocks[0]?.id ?? null);
+      if (repairedIds.length) {
+        saveDraft(draft);
+        for (const id of repairedIds) {
+          const block = draft.blocks.find((item) => item.id === id);
+          if (!block?.math) continue;
+          const latex = block.math.latex;
+          void fetch("/api/mathml", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ latex }),
+          }).then(async (response) => {
+            if (!response.ok) return null;
+            return await response.json() as { mathml: string | null; mathmlError: string | null; structureWarning: string | null; needsReview: boolean };
+          }).then((compiled) => {
+            if (!active || !compiled) return;
+            setNote((current) => {
+              const currentBlock = current?.blocks.find((item) => item.id === id);
+              if (!current || currentBlock?.math?.latex !== latex) return current;
+              const next = {
+                ...current,
+                blocks: current.blocks.map((item) => item.id === id && item.math ? {
+                  ...item,
+                  needsReview: item.needsReview || compiled.needsReview,
+                  math: { ...item.math, mathml: compiled.mathml ?? undefined, mathmlError: compiled.mathmlError ?? undefined, structureWarning: compiled.structureWarning ?? undefined },
+                } : item),
+              };
+              saveDraft(next);
+              return next;
+            });
+          }).catch(() => undefined);
+        }
+      }
+    }, 0);
+    return () => { active = false; window.clearTimeout(timer); };
   }, []);
   const reviewCount = useMemo(() => note?.blocks.filter((block) => block.needsReview).length ?? 0, [note]);
 
@@ -80,6 +125,12 @@ export default function ReviewPage() {
       if (selected) next.add(id); else next.delete(id);
       return next;
     });
+  }
+
+  function activateBlock(id: string) {
+    setActiveBlockId(id);
+    const page = note?.blocks.find((block) => block.id === id)?.page;
+    if (page) setSourcePage(page);
   }
 
   const mergeSelectedBlocks = useCallback(() => {
@@ -168,33 +219,43 @@ export default function ReviewPage() {
 
   return (
     <AppShell step="review">
-      <main className="review-layout">
-        <aside className="review-summary">
-          <p className="overline">Source</p><h2>{note.source.name}</h2><dl><div><dt>Pages</dt><dd>{note.source.pageCount}</dd></div><div><dt>Blocks</dt><dd>{note.blocks.length}</dd></div><div><dt>Needs review</dt><dd>{reviewCount}</dd></div></dl>
-          <div className="source-placeholder" aria-label="Source preview placeholder"><span>Page regions</span>{note.blocks.map((block) => <i key={block.id} className={block.needsReview ? "region-review" : ""} />)}</div>
-        </aside>
-        <section className="review-main">
-          <div className="review-toolbar"><div><p className="overline">Semantic document</p><h1>Review and correct</h1><p>Fix uncertain notation and visual descriptions before publishing.</p></div><div className="action-row"><Button variant="outline" onClick={() => router.push("/upload")}>Back</Button><DownloadHtmlButton note={note} includeOriginalPages={false} confirmUnreviewed /><DownloadHtmlButton note={note} confirmUnreviewed /><Button onClick={publish}>Generate reader link</Button></div></div>
-          {undoMessage && <div className="review-undo" role="status"><span>{undoMessage}</span>{undoStack.length > 0 && <Button variant="ghost" onClick={undoDeletion}>Undo (Ctrl+Z)</Button>}</div>}
-          <label className="title-field">Document title<input value={note.title} onChange={(event) => { const next = { ...note, title: event.target.value }; setNote(next); saveDraft(next); }} /></label>
-          <div className="structure-toolbar" aria-label="Section editing tools">
-            <span>{selectedBlockIds.size ? `${selectedBlockIds.size} selected` : "Select sections to merge"}</span>
-            <Button type="button" variant="outline" disabled={selectedBlockIds.size < 2} onClick={mergeSelectedBlocks} aria-keyshortcuts="M" title="Merge selected sections (M)">Merge selected <kbd>M</kbd></Button>
-          </div>
-          <div className="editor-stack">{note.blocks.map((block) => <NoteBlockEditor
-            key={block.id}
-            block={block}
-            documentId={note.source.documentId}
-            onChange={updateBlock}
-            onDelete={deleteBlock}
-            selected={selectedBlockIds.has(block.id)}
-            onSelectedChange={selectBlock}
-            dragging={draggedBlockId === block.id}
-            onDragStart={setDraggedBlockId}
-            onDragEnd={() => setDraggedBlockId(null)}
-            onDrop={moveDraggedBlock}
-          />)}</div>
-        </section>
+      <main className="review-workspace">
+        <div className="review-toolbar">
+          <div><p className="overline">Review extracted notes</p><h1>Review and correct</h1><p>Compare the source, refine the live document, then approve it.</p></div>
+          <div className="review-actions"><span className="review-count"><i />{reviewCount} {reviewCount === 1 ? "item" : "items"} to review</span><Button variant="outline" onClick={() => router.push("/upload")}>Back to upload</Button><DownloadHtmlButton note={note} includeOriginalPages={false} confirmUnreviewed /><DownloadHtmlButton note={note} confirmUnreviewed /><Button onClick={publish}>Approve &amp; continue</Button></div>
+        </div>
+        {undoMessage && <div className="review-undo" role="status"><span>{undoMessage}</span>{undoStack.length > 0 && <Button variant="ghost" onClick={undoDeletion}>Undo (Ctrl+Z)</Button>}</div>}
+        <div className="review-meta-row">
+          <label className="review-document-title">Document title<input value={note.title} onChange={(event) => { const next = { ...note, title: event.target.value }; setNote(next); saveDraft(next); }} /></label>
+          <div className="structure-toolbar" aria-label="Section editing tools"><span>{selectedBlockIds.size ? `${selectedBlockIds.size} selected` : "Select sections to merge"}</span><Button type="button" variant="outline" disabled={selectedBlockIds.size < 2} onClick={mergeSelectedBlocks} aria-keyshortcuts="M" title="Merge selected sections (M)">Merge selected <kbd>M</kbd></Button></div>
+        </div>
+        <div className="review-columns">
+          <aside className="source-viewer" aria-label="Original source page">
+            <header><div><span className="source-viewer-icon"><FileText size={16} aria-hidden="true" /></span><strong>Original {note.source.kind === "pdf" ? "PDF" : "image"}</strong></div><small>{note.source.name}</small></header>
+            <div className="source-page-canvas">
+              {note.source.documentId ? <img src={`/api/documents/${encodeURIComponent(note.source.documentId)}/pages/${sourcePage}`} alt={`Original notes, page ${sourcePage}`} style={{ width: `${sourceZoom * 100}%` }} /> : <div className="source-page-placeholder"><span>Original page preview</span><p>Source image preview is available for uploaded documents.</p></div>}
+            </div>
+            <footer className="source-viewer-controls">
+              <div className="source-page-navigation"><Button size="icon" variant="ghost" disabled={sourcePage <= 1} onClick={() => setSourcePage((page) => Math.max(1, page - 1))} aria-label="Previous source page"><ChevronLeft /></Button><span>Page {sourcePage} of {note.source.pageCount}</span><Button size="icon" variant="ghost" disabled={sourcePage >= note.source.pageCount} onClick={() => setSourcePage((page) => Math.min(note.source.pageCount, page + 1))} aria-label="Next source page"><ChevronRight /></Button></div>
+              <div className="source-zoom-controls"><Button size="icon" variant="ghost" disabled={sourceZoom <= 1} onClick={() => setSourceZoom((zoom) => Math.max(1, Number((zoom - 0.25).toFixed(2))))} aria-label="Zoom out"><ZoomOut /></Button><span>{Math.round(sourceZoom * 100)}%</span><Button size="icon" variant="ghost" disabled={sourceZoom >= 2.5} onClick={() => setSourceZoom((zoom) => Math.min(2.5, Number((zoom + 0.25).toFixed(2))))} aria-label="Zoom in"><ZoomIn /></Button><Button size="icon" variant="ghost" disabled={sourceZoom === 1} onClick={() => setSourceZoom(1)} aria-label="Reset zoom"><RotateCcw /></Button></div>
+            </footer>
+          </aside>
+          <section className="review-preview-panel" aria-label="Live accessible document preview">
+            <header className="preview-panel-header"><div><span className="preview-code-icon"><Code2 size={17} aria-hidden="true" /></span><strong>Accessible HTML</strong><span className="draft-pill">Draft</span></div><p>Live preview · Click an equation to edit its LaTeX</p></header>
+            <div className="review-preview-scroll"><ReviewDocumentPreview note={note} activeBlockId={activeBlockId} selectedBlockIds={selectedBlockIds} onSelectBlock={activateBlock} onSelectedChange={selectBlock} onDelete={deleteBlock} draggedBlockId={draggedBlockId} onDrop={moveDraggedBlock} /></div>
+            <footer><span>HTML document preview</span><span className="saved-state"><i />Changes saved</span></footer>
+          </section>
+          <aside className="review-inspector" aria-label="Selected content editor">
+            <header><div><span className="inspector-icon"><ListChecks size={17} aria-hidden="true" /></span><strong>Review &amp; edit</strong></div><span className="inspector-count" aria-label={`${reviewCount} items needing review`}>{reviewCount}</span></header>
+            <div className="inspector-content">
+              {activeBlockId && note.blocks.some((block) => block.id === activeBlockId) ? <>
+                <p className="inspector-intro">Selected content</p>
+                <NoteBlockEditor key={activeBlockId} block={note.blocks.find((block) => block.id === activeBlockId)!} documentId={note.source.documentId} onChange={updateBlock} onDelete={deleteBlock} selected={selectedBlockIds.has(activeBlockId)} onSelectedChange={selectBlock} dragging={draggedBlockId === activeBlockId} onDragStart={setDraggedBlockId} onDragEnd={() => setDraggedBlockId(null)} onDrop={moveDraggedBlock} />
+                <p className="inspector-help">Select more content in the preview to merge sections. Click a formula to bring its LaTeX editor here.</p>
+              </> : <p className="inspector-empty">Select a heading, paragraph, or equation in the document preview to review it.</p>}
+            </div>
+          </aside>
+        </div>
       </main>
     </AppShell>
   );

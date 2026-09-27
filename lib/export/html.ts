@@ -8,7 +8,7 @@ type CompiledMath = { latex: string; mathml: string | null; mathmlError: string 
 
 function formula(math: NonNullable<NoteBlock["math"]>) {
   return math.mathml && math.mathml.trim().startsWith("<math")
-    ? `<figure class="math-figure">${math.mathml}</figure>`
+    ? `<figure class="math-figure">${math.mathml.replace(/<mtable\b([^>]*)>/gi, (_tag, attrs: string) => `<mtable${attrs.replace(/\s(?:columnspacing|rowspacing)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "")} columnspacing="0.8em" rowspacing="0.55em">`).replace(/<mtd\b([^>]*)>/gi, (_tag, attrs: string) => `<mtd${attrs.replace(/\sstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, "")} style="padding:0.12em 0.22em">`)}</figure>`
     : `<div class="math-fallback" role="img" aria-label="${escape(math.spoken)}"><span>${escape(math.spoken)}</span><small>Math rendering needs instructor review.</small></div>`;
 }
 

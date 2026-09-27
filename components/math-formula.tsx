@@ -19,7 +19,16 @@ function safeMathml(mathml: string | undefined): string | null {
   const trimmed = mathml.trim();
   if (!trimmed.startsWith("<math")) return null;
   if (/<\s*script/i.test(trimmed)) return null;
-  return trimmed;
+  // Some generated MathML tables omit their default gaps, making adjacent matrix
+  // entries look like a single concatenated number. Set explicit row/column spacing.
+  return trimmed.replace(/<mtable\b([^>]*)>/gi, (_tag, rawAttributes: string) => {
+    const attributes = rawAttributes
+      .replace(/\s(?:columnspacing|rowspacing)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+    return `<mtable${attributes} columnspacing="0.8em" rowspacing="0.55em">`;
+  }).replace(/<mtd\b([^>]*)>/gi, (_tag, rawAttributes: string) => {
+    const attributes = rawAttributes.replace(/\sstyle\s*=\s*(?:"[^"]*"|'[^']*')/gi, "");
+    return `<mtd${attributes} style="padding:0.12em 0.22em">`;
+  });
 }
 
 export function MathFormula({
@@ -27,12 +36,14 @@ export function MathFormula({
   label = "Equation",
   selected = false,
   onPlay,
+  onSelect,
   annotations = [],
 }: {
   math: MathNode;
   label?: "Formula" | "Equation" | "Example";
   selected?: boolean;
   onPlay?: () => void;
+  onSelect?: () => void;
   annotations?: string[];
 }) {
   const mathml = safeMathml(math.mathml);
@@ -40,10 +51,11 @@ export function MathFormula({
   return (
     <section
       className={`reader-equation ${selected ? "current-equation" : ""}`}
+      onClick={onSelect}
       tabIndex={onPlay ? 0 : undefined}
       aria-label={onPlay ? `${label}. Right click or press Shift F10 to hear this card.` : undefined}
       aria-keyshortcuts={onPlay ? "Shift+F10" : undefined}
-      title={onPlay ? "Right click to hear this card" : undefined}
+      title={onPlay ? "Right click to hear this card" : onSelect ? "Click to select and edit this equation" : undefined}
       onContextMenu={(event) => { if (onPlay) { event.preventDefault(); onPlay(); } }}
       onKeyDown={(event) => {
         if (onPlay && ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")) {
@@ -52,6 +64,7 @@ export function MathFormula({
         }
       }}
     >
+      {onSelect && <button className="math-edit-trigger" type="button" onClick={(event) => { event.stopPropagation(); onSelect(); }} aria-label="Edit this equation's LaTeX">Edit LaTeX</button>}
       <span className="equation-label">{label}</span>
       <div className="math-scroll">
         {mathml ? (
