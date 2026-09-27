@@ -2,15 +2,18 @@ import type { DragEvent } from "react";
 import type { BlockKind, NoteBlock } from "@/lib/domain/note";
 import { GripVertical, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { VisualCropImage } from "@/components/visual-crop-image";
 
 const editableKinds: Array<{ value: BlockKind; label: string }> = [
   { value: "heading", label: "Heading" },
   { value: "paragraph", label: "Paragraph" },
   { value: "equation", label: "Equation" },
+  { value: "graph", label: "Graph" },
 ];
 
-export function NoteBlockEditor({ block, onChange, onDelete, selected = false, onSelectedChange, onDragStart, onDragEnd, onDrop, dragging = false }: {
+export function NoteBlockEditor({ block, documentId, onChange, onDelete, selected = false, onSelectedChange, onDragStart, onDragEnd, onDrop, dragging = false }: {
   block: NoteBlock;
+  documentId?: string;
   onChange: (block: NoteBlock) => void;
   onDelete?: (id: string) => void;
   selected?: boolean;
@@ -45,7 +48,20 @@ export function NoteBlockEditor({ block, onChange, onDelete, selected = false, o
       title: kind === "heading" ? (block.title ?? formulaText) : undefined,
       text: formulaText,
       math: undefined,
+      altText: kind === "graph" ? (block.altText ?? formulaText) : undefined,
     });
+  }
+
+  function updateCrop(field: "x" | "y" | "width" | "height", rawValue: string) {
+    const current = block.sourceRegion ?? { page: block.page ?? 1, x: 0, y: 0, width: 100, height: 100 };
+    const parsed = Number(rawValue);
+    if (!Number.isFinite(parsed)) return;
+    const maximum = field === "x" ? 100 - current.width
+      : field === "y" ? 100 - current.height
+      : field === "width" ? 100 - current.x
+      : 100 - current.y;
+    const minimum = field === "width" || field === "height" ? 1 : 0;
+    onChange({ ...block, sourceRegion: { ...current, [field]: Math.min(maximum, Math.max(minimum, parsed)) } });
   }
 
   async function compileEditedMath(latex: string, baseBlock = block) {
@@ -129,7 +145,16 @@ export function NoteBlockEditor({ block, onChange, onDelete, selected = false, o
           } else onChange({ ...block, text: candidate.reading });
         }}>Use this reading</button></div>;
       })}</div>}
-      {(block.kind === "graph" || block.kind === "diagram") && <label>Visual description<textarea rows={3} value={block.altText ?? ""} onChange={(event) => onChange({ ...block, altText: event.target.value })} /></label>}
+      {(block.kind === "graph" || block.kind === "diagram") && <div className="visual-review-card">
+        <div><strong>Source image crop</strong><p>Adjust the detected page region if the graph was cropped incorrectly.</p></div>
+        <VisualCropImage block={block} documentId={documentId} />
+        <div className="crop-controls">
+          {(["x", "y", "width", "height"] as const).map((field) => <label key={field}>{field === "x" ? "Left" : field === "y" ? "Top" : field[0].toUpperCase() + field.slice(1)} (%)
+            <input type="number" min={field === "width" || field === "height" ? 1 : 0} max="100" step="0.5" value={block.sourceRegion?.[field] ?? (field === "width" || field === "height" ? 100 : 0)} onChange={(event) => updateCrop(field, event.target.value)} />
+          </label>)}
+        </div>
+        <label>Graph alt text<textarea rows={4} value={block.altText ?? ""} onChange={(event) => onChange({ ...block, altText: event.target.value })} /></label>
+      </div>}
       <label className="review-checkbox"><input type="checkbox" checked={!block.needsReview} onChange={(event) => onChange({ ...block, needsReview: !event.target.checked })} /> Mark as reviewed</label>
     </section>
   );

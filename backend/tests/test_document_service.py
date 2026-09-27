@@ -126,3 +126,34 @@ def test_flattened_matrix_notation_is_sent_back_to_review(tmp_path):
     # ...but the structure is wrong, so it still must not pass as reviewed.
     assert block["math"]["structureWarning"] is not None
     assert block["needsReview"] is True
+
+
+def test_graph_blocks_keep_alt_text_and_offer_adjustable_page_crops(tmp_path):
+    def graph_converter(page_images, **_kwargs):
+        return {
+            "title": "Graph notes",
+            "blocks": [{
+                "id": "graph-001", "type": "graph", "page": 1,
+                "sourceRegion": {"x": 25.0, "y": 25.0, "width": 50.0, "height": 25.0},
+                "text": "Hand-drawn coordinate graph", "latex": "",
+                "description": "A rising line crosses the horizontal axis at x equals two.",
+                "spokenText": "A rising line crosses the horizontal axis at x equals two.",
+                "needsReview": False, "reviewReason": "", "confidence": 0.94,
+            }],
+        }
+
+    with TestClient(create_app(data_dir=tmp_path, converter=graph_converter)) as client:
+        upload = client.post(
+            "/documents", files={"file": ("graph.png", _png_bytes(), "image/png")}
+        )
+        document_id = upload.json()["id"]
+        note = client.get(f"/documents/{document_id}/semantic-note").json()
+        crop = client.get(
+            f"/documents/{document_id}/pages/1/crop",
+            params={"x": 25, "y": 25, "width": 50, "height": 25},
+        )
+
+    assert note["blocks"][0]["kind"] == "graph"
+    assert note["blocks"][0]["altText"].startswith("A rising line")
+    assert crop.status_code == 200
+    assert Image.open(BytesIO(crop.content)).size == (32, 16)

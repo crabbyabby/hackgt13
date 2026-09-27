@@ -37,6 +37,10 @@ export type NoteBlock = {
   text: string;
   math?: MathNode;
   altText?: string;
+  /** Optional ready-made crop, used by bundled samples and exported notes. */
+  imageUrl?: string;
+  /** Optional full-page image used to preview an editable crop in the browser. */
+  sourceImageUrl?: string;
   sourceRegion?: { page: number; x: number; y: number; width: number; height: number };
   confidence: number;
   needsReview: boolean;

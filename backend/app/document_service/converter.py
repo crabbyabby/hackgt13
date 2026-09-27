@@ -82,7 +82,7 @@ def convert_pages(
                 'heading': 'heading',
                 'equation': 'equation',
                 'diagram': 'diagram',
-                'graph': 'diagram',
+                'graph': 'graph',
             }.get(region.kind, 'paragraph')
             review_reasons = []
             if region.needsReview:
@@ -99,7 +99,11 @@ def convert_pages(
                     # accessible reading; review needs both when they diverge.
                     'text': region.verbatim,
                     'latex': (best.latex or region.verbatim) if block_type == 'equation' else '',
-                    'description': best.reading if block_type == 'diagram' else '',
+                    'description': (
+                        region.description or best.reading
+                        if block_type in ('graph', 'diagram')
+                        else ''
+                    ),
                     'spokenText': best.reading,
                     'needsReview': region.needsReview or len(region.interpretations) > 1,
                     'reviewReason': ' '.join(review_reasons),

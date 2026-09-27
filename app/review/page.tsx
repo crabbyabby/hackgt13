@@ -184,6 +184,7 @@ export default function ReviewPage() {
           <div className="editor-stack">{note.blocks.map((block) => <NoteBlockEditor
             key={block.id}
             block={block}
+            documentId={note.source.documentId}
             onChange={updateBlock}
             onDelete={deleteBlock}
             selected={selectedBlockIds.has(block.id)}

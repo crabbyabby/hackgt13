@@ -1,4 +1,5 @@
 import type { SemanticNote } from "./note";
+import { hydrateDemoNoteAssets } from "../demo-note";
 
 export const DRAFT_STORAGE_KEY = "eigenscribe.current-draft";
 
@@ -9,5 +10,5 @@ export function saveDraft(note: SemanticNote) {
 export function loadDraft(): SemanticNote | null {
   const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
   if (!raw) return null;
-  try { return JSON.parse(raw) as SemanticNote; } catch { return null; }
+  try { return hydrateDemoNoteAssets(JSON.parse(raw) as SemanticNote); } catch { return null; }
 }

@@ -5,6 +5,7 @@ import { useParams } from "next/navigation";
 import { AppShell } from "@/components/app-shell";
 import { ReaderControls, type FormulaReadRequest } from "@/components/reader-controls";
 import { MathFormula } from "@/components/math-formula";
+import { VisualCropImage } from "@/components/visual-crop-image";
 import { createDemoNote } from "@/lib/demo-note";
 import { loadDraft } from "@/lib/domain/storage";
 import type { SemanticNote } from "@/lib/domain/note";
@@ -21,8 +22,8 @@ export default function ReaderPage() {
     if (draft?.slug === slug && draft.status === "published") {
       // The reviewer’s latest edits live in this browser draft until persistence is
       // connected. Do not let an older backend extraction overwrite the export source.
-      setNote(draft);
-      return () => { active = false; };
+      const publishedDraftTimer = window.setTimeout(() => setNote(draft), 0);
+      return () => { active = false; window.clearTimeout(publishedDraftTimer); };
     }
     const draftTimer = window.setTimeout(() => {
       if (active && draft?.slug === slug) setNote(draft);
@@ -46,7 +47,7 @@ export default function ReaderPage() {
           <div className="published-content">{readerItems.map((item) => {
             if (item.type === "heading") return <h2 key={`heading-${item.sourceIndex}`}>{item.text}</h2>;
             if (item.type === "prose") return <p key={`prose-${item.sourceIndices[0]}`} className="note-paragraph" aria-label={`Paragraph. ${item.text}`}>{item.text}</p>;
-            if (item.type === "visual") return <figure key={item.block.id} className="visual-description"><figcaption>Visual description</figcaption><p>{item.block.altText ?? item.block.text}</p></figure>;
+            if (item.type === "visual") return <figure key={item.block.id} className="visual-description"><VisualCropImage block={item.block} documentId={note.source.documentId} /><figcaption>{item.block.kind === "graph" ? "Graph" : "Diagram"}</figcaption><p>{item.block.altText ?? item.block.text}</p></figure>;
             const selected = item.sourceIndex === index;
             return <MathFormula
               key={item.block.id}

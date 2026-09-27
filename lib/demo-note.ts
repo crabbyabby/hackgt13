@@ -145,13 +145,15 @@ export function createDemoNote(
       }),
       block(
         "gs-geometry",
-        "diagram",
+        "graph",
         "Geometric interpretation of the Gram-Schmidt process.",
         2,
         {
           title: "Projection geometry",
           altText: "A translucent plane labeled W two contains the earlier subspace W one, drawn as a dashed line. The original vectors x one, x two, and x three are red. The orthogonal vectors v two and v three are blue. Vector v one equals x one. Dashed construction lines show the projection of x two onto W one and the projection of x three onto W two. Subtracting each projection leaves the new orthogonal direction.",
-          sourceRegion: { page: 2, x: 16, y: 5, width: 68, height: 36 },
+          imageUrl: "/samples/gram-schmidt/projection-geometry.png",
+          sourceImageUrl: "/samples/gram-schmidt/page-2.png",
+          sourceRegion: { page: 2, x: 12.8, y: 2, width: 74, height: 28.2 },
         },
       ),
       block(
@@ -176,5 +178,28 @@ export function createDemoNote(
         2,
       ),
     ],
+  };
+}
+
+/** Add newly bundled visual assets to demo drafts saved by older app versions. */
+export function hydrateDemoNoteAssets(note: SemanticNote): SemanticNote {
+  if (note.id !== "note_demo_gram_schmidt") return note;
+  return {
+    ...note,
+    blocks: note.blocks.map((candidate) => {
+      if (candidate.id !== "gs-geometry") return candidate;
+      const legacyRegion = candidate.sourceRegion;
+      const usesLegacyCrop = legacyRegion?.x === 16 && legacyRegion.y === 5
+        && legacyRegion.width === 68 && legacyRegion.height === 36;
+      return {
+        ...candidate,
+        kind: "graph",
+        imageUrl: "/samples/gram-schmidt/projection-geometry.png",
+        sourceImageUrl: "/samples/gram-schmidt/page-2.png",
+        sourceRegion: usesLegacyCrop
+          ? { page: 2, x: 12.8, y: 2, width: 74, height: 28.2 }
+          : candidate.sourceRegion,
+      };
+    }),
   };
 }

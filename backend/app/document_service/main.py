@@ -4,13 +4,15 @@ import os
 import shutil
 import uuid
 from contextlib import asynccontextmanager
+from io import BytesIO
 from pathlib import Path
 from time import perf_counter
 from typing import Annotated
 
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
+from PIL import Image
 from pydantic import BaseModel
 
 from backend.app.document_processing.mathml import (
@@ -155,7 +157,7 @@ def create_app(data_dir=None, converter=None):
                 len(draft.blocks),
                 perf_counter() - started,
             )
-        except Exception:
+        except Exception as exc:
             logger.exception(
                 'Document job failed | document=%s stage=%s elapsed=%.2fs',
                 doc_id,
@@ -329,7 +331,7 @@ def create_app(data_dir=None, converter=None):
                     reason = structure_warning or compiled.error or 'The equation needs mathematical review.'
                     existing = semantic.get('reviewReason', '')
                     semantic['reviewReason'] = f'{existing} {reason}'.strip()
-            elif kind == 'diagram':
+            elif kind in ('graph', 'diagram'):
                 semantic['altText'] = block['description']
             blocks.append(semantic)
 
@@ -382,6 +384,43 @@ def create_app(data_dir=None, converter=None):
         if page_number not in {p['number'] for p in doc['pages']}:
             raise HTTPException(404, 'Page not found or conversion is not complete.')
         return FileResponse(directory(doc_id) / 'pages' / f'{page_number}.png', media_type='image/png')
+
+    @app.get('/documents/{doc_id}/pages/{page_number}/crop')
+    def page_crop(
+        doc_id: str,
+        page_number: int,
+        x: float,
+        y: float,
+        width: float,
+        height: float,
+    ):
+        """Return a reviewer-adjustable crop using percentage page coordinates."""
+        doc = store().get(doc_id)
+        if page_number not in {page['number'] for page in doc['pages']}:
+            raise HTTPException(404, 'Page not found or conversion is not complete.')
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > 100 or y + height > 100:
+            raise HTTPException(422, 'Crop bounds must fit within the source page.')
+        page_path = directory(doc_id) / 'pages' / f'{page_number}.png'
+        with Image.open(page_path) as source_image:
+            image_width, image_height = source_image.size
+            bounds = (
+                round(image_width * x / 100),
+                round(image_height * y / 100),
+                round(image_width * (x + width) / 100),
+                round(image_height * (y + height) / 100),
+            )
+            cropped = source_image.crop(bounds)
+            output = BytesIO()
+            cropped.save(output, format='PNG', optimize=True)
+        logger.info(
+            'Page crop rendered | document=%s page=%d x=%.2f y=%.2f width=%.2f height=%.2f',
+            doc_id, page_number, x, y, width, height,
+        )
+        return Response(
+            output.getvalue(),
+            media_type='image/png',
+            headers={'Cache-Control': 'private, max-age=3600'},
+        )
 
     @app.patch('/documents/{doc_id}')
     def edit(doc_id: str, body: EditDocument):

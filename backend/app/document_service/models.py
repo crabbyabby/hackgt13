@@ -22,7 +22,7 @@ class SourceRegion(BaseModel):
 class Block(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     id: str = Field(min_length=1, max_length=100)
-    type: Literal['heading', 'paragraph', 'equation', 'diagram']
+    type: Literal['heading', 'paragraph', 'equation', 'graph', 'diagram']
     page: int = Field(ge=1)
     sourceRegion: SourceRegion | None = None
     text: str = Field(default='', max_length=30000)
@@ -36,7 +36,13 @@ class Block(BaseModel):
 
     @model_validator(mode='after')
     def check_content(self):
-        field = {'heading': 'text', 'paragraph': 'text', 'equation': 'latex', 'diagram': 'description'}[self.type]
+        field = {
+            'heading': 'text',
+            'paragraph': 'text',
+            'equation': 'latex',
+            'graph': 'description',
+            'diagram': 'description',
+        }[self.type]
         if not getattr(self, field).strip() or not self.spokenText.strip():
             raise ValueError('Block content and narration cannot be blank.')
         if self.needsReview and not self.reviewReason.strip():
