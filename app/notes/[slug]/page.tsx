@@ -42,7 +42,7 @@ export default function ReaderPage() {
     <AppShell step="reader">
       <main className="reader-layout">
         <article className="published-note">
-          <header><p className="overline">{note.course}</p><h1>{note.title}</h1><p>Accessible interactive notes · Click any equation to listen</p></header>
+          <header><h1>{note.title}</h1><p>Accessible interactive notes · Click any equation to listen</p></header>
           <div className="published-content">{readerItems.map((item) => {
             if (item.type === "heading") return <h2 key={`heading-${item.sourceIndex}`}>{item.text}</h2>;
             if (item.type === "prose") return <p key={`prose-${item.sourceIndices[0]}`} className="note-paragraph" aria-label={`Paragraph. ${item.text}`}>{item.text}</p>;

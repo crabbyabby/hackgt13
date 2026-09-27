@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter } from "next/navigation";
 import { ArrowRight, BookOpenText, FileText, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -29,8 +30,7 @@ export default function HomePage() {
     <div className="landing-page">
       <header className="landing-header">
         <Link href="/" className="wordmark" aria-label="EigenScribe home">
-          <span className="landing-brand-icon"><BookOpenText size={19} aria-hidden="true" /></span>
-          EigenScribe
+          <Image src="/eigenscribe title logo.png" alt="" width={170} height={40} className="wordmark-logo" priority />
         </Link>
         <nav aria-label="Main navigation">
           <a href="#how-it-works">How it works</a>
@@ -41,12 +41,11 @@ export default function HomePage() {
       <main>
         <section className="landing-hero" aria-labelledby="hero-title">
           <div className="landing-copy">
-            <p className="landing-eyebrow"><span /> Accessible learning, starting with your notes</p>
-            <h1 id="hero-title">Your handwritten notes,<br />made <span>clear for everyone.</span></h1>
+            <h1 id="hero-title">Navigate<br />math <span>using voice.</span></h1>
             <p className="landing-description">Turn lecture notes, equations, and diagrams into structured, accessible course materials that are easier to read, navigate, and hear.</p>
             <div className="landing-benefits" aria-label="What EigenScribe does">
-              <span><FileText size={17} aria-hidden="true" /> Keeps the original pages</span>
-              <span><BookOpenText size={17} aria-hidden="true" /> Structures text and math</span>
+              <span><FileText size={17} aria-hidden="true" /> Voice narrated notes and formulas</span>
+              <span><BookOpenText size={17} aria-hidden="true" /> Voice control interaction</span>
             </div>
           </div>
 
@@ -66,22 +65,21 @@ export default function HomePage() {
               <strong>Drag and drop your notes here</strong>
               <span className="landing-file-types">PDF or image · up to 20 MB · PDFs up to 25 pages</span>
               <Button size="lg" onClick={() => input.current?.click()}><FileText size={17} aria-hidden="true" /> Choose a file</Button>
-              <Button size="lg" variant="ghost" onClick={openSampleNote}>Open Gram-Schmidt sample</Button>
-              <span className="landing-upload-hint">Your file opens in the upload workspace before analysis.</span>
+              <Button size="lg" variant="ghost" onClick={openSampleNote}>Open sample</Button>
             </div>
           </section>
         </section>
 
         <section className="landing-how" id="how-it-works" aria-labelledby="how-title">
-          <div><p className="overline">From page to understanding</p><h2 id="how-title">A clearer way to work with notes</h2></div>
+          <div><h2 id="how-title">How it works</h2></div>
           <div className="landing-steps">
             <article><span>01</span><h3>Upload</h3><p>Add a scan or photo of handwritten notes.</p></article>
             <article><span>02</span><h3>Review</h3><p>Check the structured text, equations, and descriptions.</p></article>
-            <article><span>03</span><h3>Read your way</h3><p>Use an accessible document with math and narration support.</p></article>
+            <article><span>03</span><h3>Read your way</h3><p>Navigate the notes with voice chat.</p></article>
           </div>
         </section>
       </main>
-      <footer className="landing-footer"><span>EigenScribe</span><span>Make knowledge easier to access.</span></footer>
+      <footer className="landing-footer"><span></span><span>HackGT13  🦀  2026.9.25-27      Created by Panda, Abby, Mackenzie & Madhuri </span></footer>
     </div>
   );
 }

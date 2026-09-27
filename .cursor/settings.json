@@ -1,0 +1,7 @@
+{
+  "plugins": {
+    "grok-voice": {
+      "enabled": true
+    }
+  }
+}
