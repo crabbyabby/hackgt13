@@ -93,6 +93,7 @@ async def test_grok_tts_stt_and_realtime_session_requests(tmp_path):
         service = GrokVoiceService(
             api_key="test-xai-key",
             voice_id="eve",
+            formula_voice_id="luna",
             language="en",
             realtime_model="grok-voice-latest",
             client=client,
@@ -102,6 +103,7 @@ async def test_grok_tts_stt_and_realtime_session_requests(tmp_path):
         restarted_service = GrokVoiceService(
             api_key="test-xai-key",
             voice_id="eve",
+            formula_voice_id="luna",
             language="en",
             realtime_model="grok-voice-latest",
             client=client,
@@ -124,3 +126,40 @@ async def test_grok_tts_stt_and_realtime_session_requests(tmp_path):
     assert requests[1].url.path == "/v1/stt"
     assert requests[2].url.path == "/v1/realtime/client_secrets"
     assert sum(request.url.path == "/v1/tts" for request in requests) == 1
+
+
+async def test_full_reading_uses_two_voices_then_reuses_composite_cache(tmp_path):
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(200, content=f"audio-{body['voice_id']}".encode())
+
+    cache_dir = tmp_path / "voice-cache"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            formula_voice_id="luna",
+            language="en",
+            realtime_model="grok-voice-latest",
+            client=client,
+            cache_dir=cache_dir,
+        )
+        segments = MathNarrationService(api_key=None, model="unused").reading_segments(note_fixture())
+        first = await service.synthesize_reading(segments)
+
+        restarted = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            formula_voice_id="luna",
+            language="en",
+            realtime_model="grok-voice-latest",
+            client=client,
+            cache_dir=cache_dir,
+        )
+        second = await restarted.synthesize_reading(segments)
+
+    assert first == second == b"audio-eveaudio-luna"
+    assert [request["voice_id"] for request in requests] == ["eve", "luna"]

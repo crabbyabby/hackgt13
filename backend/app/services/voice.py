@@ -92,11 +92,13 @@ class GrokVoiceService:
         voice_id: str,
         language: str,
         realtime_model: str,
+        formula_voice_id: str = "luna",
         client: httpx.AsyncClient | None = None,
         cache_dir: str | Path | None = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
+        self.formula_voice_id = formula_voice_id
         self.language = language
         self.realtime_model = realtime_model
         self.client = client
@@ -107,10 +109,11 @@ class GrokVoiceService:
             raise VoiceProviderUnavailable("Configure XAI_API_KEY in .env.local.")
         return self.api_key
 
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(self, text: str, *, voice_id: str | None = None) -> bytes:
+        selected_voice = voice_id or self.voice_id
         cache_key = self.cache.key(
             "grok-tts-v1",
-            {"text": text, "voice": self.voice_id, "language": self.language},
+            {"text": text, "voice": selected_voice, "language": self.language},
         )
         cached = self.cache.read_bytes("speech", cache_key, ".mp3")
         if cached is not None:
@@ -126,16 +129,16 @@ class GrokVoiceService:
                     len(cached),
                 )
                 return cached
-            return await self._synthesize_uncached(text, cache_key)
+            return await self._synthesize_uncached(text, cache_key, selected_voice)
 
-    async def _synthesize_uncached(self, text: str, cache_key: str) -> bytes:
+    async def _synthesize_uncached(self, text: str, cache_key: str, voice_id: str) -> bytes:
         api_key = self._require_key()
         request_client = self.client or httpx.AsyncClient(timeout=90)
         chunks = self._speech_chunks(text)
         started = perf_counter()
         logger.info(
             "TTS start | provider=grok voice=%s language=%s chars=%d chunks=%d preview=%r",
-            self.voice_id,
+            voice_id,
             self.language,
             len(text),
             len(chunks),
@@ -148,7 +151,7 @@ class GrokVoiceService:
                 response = await request_client.post(
                     "https://api.x.ai/v1/tts",
                     headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-                    json={"text": chunk, "voice_id": self.voice_id, "language": self.language},
+                    json={"text": chunk, "voice_id": voice_id, "language": self.language},
                 )
                 if response.is_error:
                     raise VoiceProviderError(
@@ -171,6 +174,52 @@ class GrokVoiceService:
         finally:
             if self.client is None:
                 await request_client.aclose()
+
+    async def synthesize_reading(self, segments: list[tuple[str, bool]]) -> bytes:
+        """Render an ordered note reading, switching voices for mathematical segments."""
+        normalized = [(text.strip(), is_formula) for text, is_formula in segments if text.strip()]
+        if not normalized:
+            raise VoiceProviderError("The note has no readable content.")
+        cache_key = self.cache.key(
+            "grok-multivoice-reading-v1",
+            {
+                "segments": normalized,
+                "notes_voice": self.voice_id,
+                "formula_voice": self.formula_voice_id,
+                "language": self.language,
+            },
+        )
+        cached = self.cache.read_bytes("readings", cache_key, ".mp3")
+        if cached is not None:
+            logger.info("Full reading cache hit | key=%s bytes=%d", cache_key[:12], len(cached))
+            return cached
+
+        async with self.cache.lock(cache_key):
+            cached = self.cache.read_bytes("readings", cache_key, ".mp3")
+            if cached is not None:
+                logger.info("Full reading cache hit after wait | key=%s", cache_key[:12])
+                return cached
+            logger.info(
+                "Full reading generation start | segments=%d notes_voice=%s formula_voice=%s",
+                len(normalized),
+                self.voice_id,
+                self.formula_voice_id,
+            )
+            parts = []
+            for index, (text, is_formula) in enumerate(normalized, start=1):
+                voice = self.formula_voice_id if is_formula else self.voice_id
+                logger.info(
+                    "Full reading segment | segment=%d/%d kind=%s voice=%s",
+                    index,
+                    len(normalized),
+                    "formula" if is_formula else "notes",
+                    voice,
+                )
+                parts.append(await self.synthesize(text, voice_id=voice))
+            audio = b"".join(parts)
+            self.cache.write_bytes("readings", cache_key, ".mp3", audio)
+            logger.info("Full reading cache stored | key=%s bytes=%d", cache_key[:12], len(audio))
+            return audio
 
     async def transcribe(self, *, filename: str, content: bytes, content_type: str) -> dict:
         api_key = self._require_key()
@@ -360,6 +409,33 @@ Semantic source:
                 fallback=fallback,
                 cache_key=cache_key,
             )
+
+    def reading_segments(self, note: SemanticNote) -> list[tuple[str, bool]]:
+        """Preserve semantic order while separating prose and mathematics for TTS voices."""
+        raw: list[tuple[str, bool]] = [(note.title, False)]
+        for block in note.blocks:
+            prose: list[str] = []
+            if block.title:
+                prose.append(block.title)
+            if block.text and (block.math is None or block.text.strip() != block.math.latex.strip()):
+                prose.append(block.text)
+            if prose:
+                raw.append((". ".join(prose), False))
+            if block.math is not None:
+                raw.append((self._paced_math(block.math.latex, block.math.spoken), True))
+            if block.altText:
+                raw.append((f"Visual description. {block.altText}", False))
+
+        merged: list[tuple[str, bool]] = []
+        for text, is_formula in raw:
+            text = text.strip()
+            if not text:
+                continue
+            if merged and merged[-1][1] == is_formula:
+                merged[-1] = (f"{merged[-1][0]}\n\n{GROK_PAUSE}\n\n{text}", is_formula)
+            else:
+                merged.append((text, is_formula))
+        return merged
 
     async def _prepare_uncached(
         self,

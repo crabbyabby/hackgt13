@@ -51,6 +51,7 @@ publication_service = PublicationService(notes=repository)
 grok_voice_service = GrokVoiceService(
     api_key=settings.xai_api_key,
     voice_id=settings.grok_voice_id,
+    formula_voice_id=settings.grok_formula_voice_id,
     language=settings.grok_voice_language,
     realtime_model=settings.grok_voice_model,
     cache_dir=settings.voice_cache_dir,

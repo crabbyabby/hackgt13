@@ -32,6 +32,17 @@ function browserSpeechChunks(script: string) {
     .filter(Boolean);
 }
 
+function browserFullNarration(note: SemanticNote) {
+  const parts = [note.title];
+  for (const block of note.blocks) {
+    if (block.title) parts.push(block.title);
+    if (block.text && (!block.math || block.text.trim() !== block.math.latex.trim())) parts.push(block.text);
+    if (block.math) parts.push(block.math.spoken);
+    if (block.altText) parts.push(`Visual description. ${block.altText}`);
+  }
+  return parts.join("\n\n[pause]\n\n");
+}
+
 function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: ReaderControlsProps) {
   const [speaking, setSpeaking] = useState(false);
   const [loadingNarration, setLoadingNarration] = useState<"full" | "formula" | null>(null);
@@ -119,6 +130,37 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     setLoadingNarration(mode);
     setMessage(mode === "full" ? "Writing the full math narration…" : "Preparing this formula for speech…");
     try {
+      if (mode === "full") {
+        setMessage("Loading the cached multi-voice reading…");
+        const runFullBrowserFallback = () => {
+          stopNarration(false);
+          speakWithBrowser(browserFullNarration(note), "full");
+        };
+        const narrationResponse = await fetch("/api/voice/narration", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ note }),
+        });
+        if (!narrationResponse.ok) {
+          runFullBrowserFallback();
+          return;
+        }
+        const audioUrl = URL.createObjectURL(await narrationResponse.blob());
+        audioUrlRef.current = audioUrl;
+        const audio = new Audio(audioUrl);
+        audioRef.current = audio;
+        audio.onended = () => {
+          setSpeaking(false);
+          setMessage("Narration finished.");
+          URL.revokeObjectURL(audioUrl);
+          audioUrlRef.current = null;
+        };
+        audio.onerror = runFullBrowserFallback;
+        await audio.play();
+        setSpeaking(true);
+        setMessage("Reading notes in the notes voice and mathematics in the formula voice.");
+        return;
+      }
       const scriptResponse = await fetch("/api/voice/narration-script", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -234,7 +276,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
       </div>
       <section className="voice-mode">
         <span className="mode-number">1</span>
-        <div><h2>Read full notes</h2><p>Generates one paced MP3, with automatic browser-voice fallback. Longer notes can take a moment.</p></div>
+        <div><h2>Read full notes</h2><p>Reads all prose in the notes voice and switches to a distinct formula voice for mathematics. The completed reading is stored for instant replay.</p></div>
         <Button onClick={() => speaking ? stopNarration() : void generateNarration()} disabled={loadingNarration !== null || connected}>
           {loadingNarration === "full" ? <AudioLines className="spin" /> : speaking ? <Square /> : <Headphones />}
           {loadingNarration === "full" ? "Generating…" : speaking ? "Stop" : "Generate and read"}

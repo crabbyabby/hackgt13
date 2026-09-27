@@ -68,9 +68,14 @@ async def create_speech(body: SpeechRequest):
 async def create_narration(body: NarrationRequest):
     if body.blockIndex is not None and body.blockIndex >= len(body.note.blocks):
         raise HTTPException(status_code=422, detail="The requested note block does not exist.")
-    script = await math_narration_service.prepare(body.note, body.blockIndex)
     try:
-        audio = await grok_voice_service.synthesize(script)
+        if body.blockIndex is None:
+            audio = await grok_voice_service.synthesize_reading(
+                math_narration_service.reading_segments(body.note)
+            )
+        else:
+            script = await math_narration_service.prepare(body.note, body.blockIndex)
+            audio = await grok_voice_service.synthesize(script, voice_id=grok_voice_service.formula_voice_id)
     except VoiceProviderUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except VoiceProviderError as exc:
