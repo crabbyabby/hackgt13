@@ -41,56 +41,56 @@ _PDF_MODELS = (
     PdfModelOption(
         provider=AiProvider.OPENAI,
         id="gpt-6-astra",
-        label="Astra — highest fidelity",
+        label="Astra",
         description="Use when dense handwriting, diagrams, or ambiguous notation need maximum reasoning.",
         recommendedFor="final extraction and difficult notes",
     ),
     PdfModelOption(
         provider=AiProvider.OPENAI,
         id="gpt-6-sol",
-        label="Sol — balanced",
+        label="Sol",
         description="Balances transcription quality, latency, and cost for most course notes.",
         recommendedFor="default processing",
     ),
     PdfModelOption(
         provider=AiProvider.OPENAI,
         id="gpt-6-luna",
-        label="Luna — fastest",
+        label="Luna",
         description="Use for quick drafts that will receive careful human review.",
         recommendedFor="rapid previews and simple notes",
     ),
     PdfModelOption(
         provider=AiProvider.GOOGLE,
         id="gemini-3.8-flash",
-        label="Gemini 3.8 Flash — recommended",
+        label="Gemini 3.8 Flash",
         description="Google's current production multimodal model with native PDF understanding.",
         recommendedFor="high-quality document extraction",
     ),
     PdfModelOption(
         provider=AiProvider.GOOGLE,
         id="gemini-3.7-flash",
-        label="Gemini 3.7 Flash — previous generation",
+        label="Gemini 3.7 Flash",
         description="A stable multimodal alternative for comparing transcription quality.",
         recommendedFor="evaluation and fallback processing",
     ),
     PdfModelOption(
         provider=AiProvider.GOOGLE,
         id="gemini-3.5-flash-lite",
-        label="Gemini 3.5 Flash-Lite — economical",
+        label="Gemini 3.5 Flash-Lite",
         description="Lower-cost Google model for simpler, clearly written notes.",
         recommendedFor="fast drafts and clean handwriting",
     ),
     PdfModelOption(
         provider=AiProvider.XAI,
         id="grok-4.7",
-        label="Grok 4.7 — experimental PDF",
+        label="Grok 4.7",
         description="xAI's current flagship with PDF attachment search; evaluate carefully on handwriting.",
         recommendedFor="provider comparison and evaluation",
     ),
     PdfModelOption(
         provider=AiProvider.XAI,
         id="grok-4.6",
-        label="Grok 4.6 — comparison",
+        label="Grok 4.6",
         description="Previous Grok generation retained for extraction comparisons.",
         recommendedFor="evaluation and fallback processing",
     ),
@@ -211,7 +211,11 @@ class PdfTranscription(PdfTranscriptionPayload):
 # before any output and are paid for in full request latency.
 _OPENAI_EFFORT = {"none": "none", "minimal": "minimal", "low": "low", "medium": "medium", "high": "high"}
 _GEMINI_THINKING_LEVEL = {
-    "none": "MINIMAL", "minimal": "MINIMAL", "low": "LOW", "medium": "MEDIUM", "high": "HIGH",
+    "none": "MINIMAL",
+    "minimal": "MINIMAL",
+    "low": "LOW",
+    "medium": "MEDIUM",
+    "high": "HIGH",
 }
 
 
@@ -243,8 +247,9 @@ def best_reading(region: TranscribedRegion) -> InterpretationCandidate:
 
 
 class PdfProcessor(Protocol):
-    async def process(self, *, filename: str, content: bytes, model: str | None = None) -> PdfTranscription:
-        ...
+    async def process(
+        self, *, filename: str, content: bytes, model: str | None = None
+    ) -> PdfTranscription: ...
 
 
 class PdfProcessingError(RuntimeError):
@@ -328,8 +333,15 @@ def transcription_instructions(*, raw_pass: bool) -> str:
 
 
 class OpenAIPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
-                 raw_pass: bool = True, grounding_pass: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        default_model: str,
+        effort: str = "medium",
+        raw_pass: bool = True,
+        grounding_pass: bool = True,
+    ) -> None:
         self.effort = effort
         self.raw_pass = raw_pass
         self.grounding_pass = grounding_pass
@@ -355,19 +367,26 @@ class OpenAIPdfProcessor:
             if self.grounding_pass:
                 logger.info(
                     "OpenAI grounding pass start | model=%s file=%r bytes=%d",
-                    selected_model, filename, len(content),
+                    selected_model,
+                    filename,
+                    len(content),
                 )
                 grounding_response = await self.client.responses.create(
                     model=selected_model,
                     store=False,
                     instructions=_GROUNDING_INSTRUCTIONS,
-                    input=[{
-                        "role": "user",
-                        "content": [file_input, {
-                            "type": "input_text",
-                            "text": "Read and transcribe the complete notes. Preserve their mathematical and visual context.",
-                        }],
-                    }],
+                    input=[
+                        {
+                            "role": "user",
+                            "content": [
+                                file_input,
+                                {
+                                    "type": "input_text",
+                                    "text": "Read and transcribe the complete notes. Preserve their mathematical and visual context.",
+                                },
+                            ],
+                        }
+                    ],
                     **({"reasoning": reasoning} if reasoning else {}),
                 )
                 grounded = grounding_response.output_text.strip()
@@ -375,7 +394,8 @@ class OpenAIPdfProcessor:
                     raise PdfProcessingError("The model returned an empty grounding transcription.")
                 logger.info(
                     "OpenAI grounding pass complete | characters=%d preview=%r",
-                    len(grounded), grounded[:500],
+                    len(grounded),
+                    grounded[:500],
                 )
 
             structuring_request = "Transcribe this PDF completely into the required loss-aware schema."
@@ -423,8 +443,9 @@ class OpenAIPdfProcessor:
 
 
 class GeminiPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
-                 raw_pass: bool = True) -> None:
+    def __init__(
+        self, *, api_key: str, default_model: str, effort: str = "medium", raw_pass: bool = True
+    ) -> None:
         self.effort = effort
         self.raw_pass = raw_pass
         if not api_key:
@@ -465,8 +486,9 @@ class GeminiPdfProcessor:
 
 
 class GrokPdfProcessor:
-    def __init__(self, *, api_key: str, default_model: str, effort: str = "medium",
-                 raw_pass: bool = True) -> None:
+    def __init__(
+        self, *, api_key: str, default_model: str, effort: str = "medium", raw_pass: bool = True
+    ) -> None:
         self.effort = effort
         self.raw_pass = raw_pass
         if not api_key:
@@ -514,7 +536,9 @@ class GrokPdfProcessor:
                 try:
                     await self.client.files.delete(uploaded_file.id)
                 except Exception as cleanup_error:  # noqa: BLE001 - best-effort remote cleanup
-                    logger.warning("Could not delete temporary xAI file %s: %s", uploaded_file.id, cleanup_error)
+                    logger.warning(
+                        "Could not delete temporary xAI file %s: %s", uploaded_file.id, cleanup_error
+                    )
 
         return PdfTranscription(
             **payload.model_dump(),

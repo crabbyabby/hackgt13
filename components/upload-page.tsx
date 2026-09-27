@@ -20,7 +20,6 @@ type PdfModel = {
   available: boolean;
 };
 
-const fallbackModel: PdfModel = { provider: "development", id: "development-fixture", label: "Development fixture — no API call", description: "Local example output", recommendedFor: "local UI development", available: true };
 // Upload directly to the Python service so an intermediate Worker/proxy body limit
 // cannot reject files before the backend's configured 20 MiB validation runs.
 const PYTHON_BACKEND_URL = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL ?? "http://127.0.0.1:8000";
@@ -30,8 +29,9 @@ export default function UploadPage() {
   const [state, setState] = useState<"idle" | "running" | "error">("idle");
   const [error, setError] = useState("");
   const [progress, setProgress] = useState("");
-  const [models, setModels] = useState<PdfModel[]>([fallbackModel]);
-  const [selection, setSelection] = useState("development:development-fixture");
+  const [processingStage, setProcessingStage] = useState("idle");
+  const [models, setModels] = useState<PdfModel[]>([]);
+  const [selection, setSelection] = useState("");
   const input = useRef<HTMLInputElement>(null);
   const router = useRouter();
 
@@ -39,16 +39,17 @@ export default function UploadPage() {
     fetch("/api/pdf-models")
       .then((response) => response.ok ? response.json() as Promise<PdfModel[]> : Promise.reject())
       .then((options) => {
-        setModels(options);
-        const firstAvailable = options.find((option) => option.available && option.provider !== "development") ?? options.find((option) => option.available) ?? fallbackModel;
-        setSelection(`${firstAvailable.provider}:${firstAvailable.id}`);
+        const productionOptions = options.filter((option) => option.provider !== "development");
+        setModels(productionOptions);
+        const firstAvailable = productionOptions.find((option) => option.available);
+        setSelection(firstAvailable ? `${firstAvailable.provider}:${firstAvailable.id}` : "");
       })
-      .catch(() => setModels([fallbackModel]));
+      .catch(() => setModels([]));
   }, []);
 
   async function analyze() {
     if (!file) return;
-    setState("running"); setError(""); setProgress("Uploading source document…");
+    setState("running"); setError(""); setProgress("Uploading source document…"); setProcessingStage("queued");
     let elapsedTimer: number | undefined;
     const [provider, model] = selection.split(":", 2);
     const form = new FormData(); form.append("file", file); form.append("provider", provider); form.append("model", model);
@@ -76,13 +77,16 @@ export default function UploadPage() {
         const statusResponse = await fetch(`/api/documents/${encodeURIComponent(accepted.id)}`, { cache: "no-store" });
         const document = await statusResponse.json() as { status?: string; processingStage?: string; error?: string; blocks?: unknown[] };
         if (!statusResponse.ok) throw new Error(document.error ?? "Could not read processing status.");
-        const stage = document.processingStage?.replaceAll("_", " ") ?? document.status ?? "unknown";
+        const rawStage = document.processingStage ?? document.status ?? "unknown";
+        if (rawStage !== "failed") setProcessingStage(rawStage);
+        const stage = rawStage.replaceAll("_", " ");
         currentStage = stage.toLowerCase() === "ai conversion" ? "AI conversion" : stage;
         const elapsed = Math.floor((Date.now() - processingStartedAt) / 1000);
         if (attempt === 1 || attempt % 5 === 0) console.info(`[EigenScribe] Poll ${attempt}: status=${document.status} stage=${currentStage} elapsed=${elapsed}s`);
         updateProgress();
         if (document.status === "failed") throw new Error(document.error ?? "Document processing failed.");
         if (document.status === "needs_review" || document.status === "ready") {
+          setProcessingStage("complete");
           setProgress(`Extraction complete. Preparing ${document.blocks?.length ?? 0} blocks for review…`);
           const noteResponse = await fetch(`/api/documents/${encodeURIComponent(accepted.id)}/semantic-note`, { cache: "no-store" });
           const notePayload = await noteResponse.json() as ExtractionResult["note"] | { error: string };
@@ -119,21 +123,22 @@ export default function UploadPage() {
             <div><strong>{file?.name ?? "Choose a PDF or image"}</strong><p>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "PDF (up to 25 pages), PNG, JPG, or HEIC · maximum 20 MB"}</p></div>
             <Button variant="outline" onClick={() => input.current?.click()}>{file ? "Replace" : "Choose file"}</Button>
           </div>
-          <label className="model-picker">PDF handwriting model
+          <label className="model-picker">Processing Model
             <select value={selection} onChange={(event) => setSelection(event.target.value)}>
-              {(["openai", "google", "xai", "development"] as const).map((provider) => {
+              {!models.length && <option value="">No processing models configured</option>}
+              {(["openai", "google", "xai"] as const).map((provider) => {
                 const providerModels = models.filter((option) => option.provider === provider);
                 if (!providerModels.length) return null;
-                return <optgroup key={provider} label={provider === "google" ? "Google Gemini" : provider === "xai" ? "xAI Grok" : provider === "openai" ? "OpenAI" : "Local development"}>{providerModels.map((option) => <option key={`${option.provider}:${option.id}`} value={`${option.provider}:${option.id}`} disabled={!option.available}>{option.label}{option.available ? "" : " — API key required"}</option>)}</optgroup>;
+                return <optgroup key={provider} label={provider === "google" ? "Google Gemini" : provider === "xai" ? "xAI Grok" : "OpenAI"}>{providerModels.map((option) => <option key={`${option.provider}:${option.id}`} value={`${option.provider}:${option.id}`} disabled={!option.available}>{option.label}{option.available ? "" : " — API key required"}</option>)}</optgroup>;
               })}
             </select>
             <small>{models.find((option) => `${option.provider}:${option.id}` === selection)?.description}</small>
           </label>
           {error && <p className="error-message" role="alert">{error}</p>}
           {state === "running" && <p className="processing-message" aria-live="polite">{progress}</p>}
-          <div className="action-row"><Button size="lg" disabled={!file || state === "running"} onClick={analyze}>{state === "running" ? "Analyzing…" : "Analyze notes"}</Button><Button size="lg" variant="ghost" onClick={openArchitectureDemo}>Open development fixture</Button></div>
+          <div className="action-row"><Button size="lg" disabled={!file || !selection || state === "running"} onClick={analyze}>{state === "running" ? "Analyzing…" : "Analyze notes"}</Button><Button size="lg" variant="ghost" onClick={openArchitectureDemo}>View sample</Button></div>
         </section>
-        <aside className="secondary-panel"><h2>Extraction pipeline</h2><p>Each stage has its own contract and can be replaced independently.</p><PipelineList running={state === "running"} /></aside>
+        <aside className="secondary-panel"><h2>Extraction pipeline</h2><PipelineList processingStage={processingStage} failed={state === "error"} /></aside>
       </main>
     </AppShell>
   );

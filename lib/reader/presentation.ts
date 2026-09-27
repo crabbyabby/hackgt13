@@ -15,7 +15,11 @@ export function readableText(block: NoteBlock) {
   const preferred = [...(block.interpretations ?? [])]
     .sort((left, right) => right.confidence - left.confidence)
     .find((candidate) => candidate.reading.trim())?.reading;
-  return (preferred ?? block.text).replace(/\s+/g, " ").trim();
+  return (preferred ?? block.text)
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 function completeSentence(value: string) {
@@ -108,8 +112,17 @@ export function buildReaderItems(note: SemanticNote): ReaderItem[] {
       return;
     }
     if (text) {
-      pendingText.push(text);
-      pendingIndices.push(sourceIndex);
+      const paragraphs = text.split(/\n\n+/).filter(Boolean);
+      if (paragraphs.length > 1) {
+        for (const paragraph of paragraphs) {
+          pendingText.push(paragraph);
+          pendingIndices.push(sourceIndex);
+          flushProse();
+        }
+      } else {
+        pendingText.push(text);
+        pendingIndices.push(sourceIndex);
+      }
     }
   });
   flushProse();

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { AppShell } from "@/components/app-shell";
@@ -17,6 +17,8 @@ export default function ReviewPage() {
   const [note, setNote] = useState<SemanticNote | null>(null);
   const [undoStack, setUndoStack] = useState<DeletedContent[]>([]);
   const [undoMessage, setUndoMessage] = useState("");
+  const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set());
+  const [draggedBlockId, setDraggedBlockId] = useState<string | null>(null);
   const router = useRouter();
   useEffect(() => {
     const timer = window.setTimeout(() => setNote(loadDraft() ?? createDemoNote()), 0);
@@ -39,6 +41,7 @@ export default function ReviewPage() {
     const next = { ...note, blocks: [...note.blocks.slice(0, start), ...note.blocks.slice(end)], updatedAt: new Date().toISOString() };
     setNote(next);
     saveDraft(next);
+    setSelectedBlockIds((ids) => new Set([...ids].filter((id) => !removed.some((block) => block.id === id))));
     setUndoMessage(`Removed ${selected.kind === "heading" ? "section" : "block"}: ${label}. Press Ctrl+Z to undo.`);
   }
 
@@ -71,6 +74,88 @@ export default function ReviewPage() {
     setNote(next); saveDraft(next);
   }
 
+  function selectBlock(id: string, selected: boolean) {
+    setSelectedBlockIds((current) => {
+      const next = new Set(current);
+      if (selected) next.add(id); else next.delete(id);
+      return next;
+    });
+  }
+
+  const mergeSelectedBlocks = useCallback(() => {
+    if (!note || selectedBlockIds.size < 2) return;
+    const indexed = note.blocks
+      .map((block, index) => ({ block, index }))
+      .filter(({ block }) => selectedBlockIds.has(block.id));
+    if (indexed.length < 2) return;
+
+    const selected = indexed.map(({ block }) => block);
+    const base = selected[0];
+    const mathBlocks = selected.filter((block) => block.math);
+    const sameKind = selected.every((block) => block.kind === base.kind);
+    const kind = sameKind && !(base.kind === "equation" && mathBlocks.length > 1)
+      ? base.kind
+      : "paragraph";
+    const paragraphs = selected.map((block) => {
+      const parts: string[] = [];
+      if (block.title && block.title !== block.text) parts.push(block.title);
+      if (block.text.trim()) parts.push(block.text.trim());
+      if (block.math && !block.text.includes(block.math.latex) && !block.text.includes(block.math.spoken)) {
+        parts.push(`${block.math.spoken} (LaTeX: ${block.math.latex})`);
+      }
+      if (block.altText) parts.push(`Visual description: ${block.altText}`);
+      return parts.join("\n");
+    }).filter(Boolean);
+    const retainedMath = kind === "equation" && mathBlocks.length === 1 ? mathBlocks[0].math : undefined;
+    const merged: NoteBlock = {
+      ...base,
+      kind,
+      title: kind === "heading" ? (base.title ?? paragraphs[0]) : undefined,
+      text: paragraphs.join("\n\n"),
+      math: retainedMath,
+      altText: undefined,
+      sourceRegion: undefined,
+      confidence: Math.min(...selected.map((block) => block.confidence)),
+      needsReview: selected.some((block) => block.needsReview),
+      reviewReason: `Merged from ${selected.length} source sections.`,
+      interpretations: undefined,
+    };
+    const insertionIndex = indexed[0].index;
+    const remaining = note.blocks.filter((block) => !selectedBlockIds.has(block.id));
+    remaining.splice(insertionIndex, 0, merged);
+    const next = { ...note, blocks: remaining, updatedAt: new Date().toISOString() };
+    setNote(next);
+    saveDraft(next);
+    setSelectedBlockIds(new Set());
+    setUndoMessage(`Merged ${selected.length} sections into one ${kind} block.`);
+  }, [note, selectedBlockIds]);
+
+  useEffect(() => {
+    function handleMergeShortcut(event: KeyboardEvent) {
+      if (event.key.toLowerCase() !== "m" || event.ctrlKey || event.metaKey || event.altKey || selectedBlockIds.size < 2) return;
+      const target = event.target as HTMLElement | null;
+      if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+      event.preventDefault();
+      mergeSelectedBlocks();
+    }
+    window.addEventListener("keydown", handleMergeShortcut);
+    return () => window.removeEventListener("keydown", handleMergeShortcut);
+  }, [mergeSelectedBlocks, selectedBlockIds.size]);
+
+  function moveDraggedBlock(targetId: string, after: boolean) {
+    if (!note || !draggedBlockId || draggedBlockId === targetId) return;
+    const moved = note.blocks.find((block) => block.id === draggedBlockId);
+    if (!moved) return;
+    const reordered = note.blocks.filter((block) => block.id !== draggedBlockId);
+    const targetIndex = reordered.findIndex((block) => block.id === targetId);
+    if (targetIndex < 0) return;
+    reordered.splice(targetIndex + (after ? 1 : 0), 0, moved);
+    const next = { ...note, blocks: reordered, updatedAt: new Date().toISOString() };
+    setNote(next);
+    saveDraft(next);
+    setDraggedBlockId(null);
+  }
+
   function publish() {
     if (!note) return;
     if (!confirmWithUnreviewedContent(note, "generate the reader link")) return;
@@ -92,7 +177,22 @@ export default function ReviewPage() {
           <div className="review-toolbar"><div><p className="overline">Semantic document</p><h1>Review and correct</h1><p>Fix uncertain notation and visual descriptions before publishing.</p></div><div className="action-row"><Button variant="outline" onClick={() => router.push("/upload")}>Back</Button><DownloadHtmlButton note={note} includeOriginalPages={false} confirmUnreviewed /><DownloadHtmlButton note={note} confirmUnreviewed /><Button onClick={publish}>Generate reader link</Button></div></div>
           {undoMessage && <div className="review-undo" role="status"><span>{undoMessage}</span>{undoStack.length > 0 && <Button variant="ghost" onClick={undoDeletion}>Undo (Ctrl+Z)</Button>}</div>}
           <label className="title-field">Document title<input value={note.title} onChange={(event) => { const next = { ...note, title: event.target.value }; setNote(next); saveDraft(next); }} /></label>
-          <div className="editor-stack">{note.blocks.map((block) => <NoteBlockEditor key={block.id} block={block} onChange={updateBlock} onDelete={deleteBlock} />)}</div>
+          <div className="structure-toolbar" aria-label="Section editing tools">
+            <span>{selectedBlockIds.size ? `${selectedBlockIds.size} selected` : "Select sections to merge"}</span>
+            <Button type="button" variant="outline" disabled={selectedBlockIds.size < 2} onClick={mergeSelectedBlocks} aria-keyshortcuts="M" title="Merge selected sections (M)">Merge selected <kbd>M</kbd></Button>
+          </div>
+          <div className="editor-stack">{note.blocks.map((block) => <NoteBlockEditor
+            key={block.id}
+            block={block}
+            onChange={updateBlock}
+            onDelete={deleteBlock}
+            selected={selectedBlockIds.has(block.id)}
+            onSelectedChange={selectBlock}
+            dragging={draggedBlockId === block.id}
+            onDragStart={setDraggedBlockId}
+            onDragEnd={() => setDraggedBlockId(null)}
+            onDrop={moveDraggedBlock}
+          />)}</div>
         </section>
       </main>
     </AppShell>
