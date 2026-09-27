@@ -28,7 +28,7 @@ python3 -m venv .venv
 
 ## Your first five minutes
 1. At /docs expand POST /documents and click Try it out.
-2. Choose a PNG/JPEG or a PDF of 1–3 pages and click Execute.
+2. Choose a PNG/JPEG or a PDF of 1–25 pages and click Execute.
 3. Copy the returned id. A 202 response means accepted, not converted yet.
 4. Run GET /documents/{doc_id} with that ID. Poll until status changes from
    processing to needs_review or failed.
@@ -98,6 +98,11 @@ $env:EIGENSCRIBE_DATA_DIR = 'C:\eigenscribe-data'
 $env:FRONTEND_ORIGINS = 'http://localhost:5173,http://localhost:3000'
 ```
 
+The browser uploads directly to the Python API to avoid intermediary request-body
+limits. Set `NEXT_PUBLIC_PYTHON_BACKEND_URL` in the frontend environment to the
+backend's HTTPS origin when deployed, and include the frontend origin in
+`FRONTEND_ORIGINS` on the backend.
+
 Returned sourceUrl/imageUrl values are relative to the backend origin. The
 frontend should resolve them against http://127.0.0.1:8000, not its own origin.
 Audio is generated on demand and is not persisted. Full-document and individual
@@ -121,8 +126,8 @@ TestClient waits for background work; a real browser receives 202 before complet
 This is a local single-process prototype, not an authenticated public service.
 Run exactly one Uvicorn worker. Background jobs are in-process; on restart,
 interrupted documents become failed and can be retried. A hanging converter
-needs its own API timeout. File limit is 10 MiB; images are limited to 20 million
-pixels, resized to a maximum 2000-pixel side, and PDFs to 3 pages. Smaller symbols
+needs its own API timeout. File limit is 20 MiB; images are limited to 40 million
+pixels, resized to a maximum 4200-pixel side, and PDFs to 25 pages. Smaller symbols
 can lose detail after resizing: compare transcription against the original.
 
 The app has no accounts or access control. Anyone with network access to this

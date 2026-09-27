@@ -10,7 +10,7 @@ def convert_pages(
     ...
 ```
 
-- Called once with all page images in source order (maximum 3 in this prototype).
+- Called once with all page images in source order (maximum 25 in this prototype).
 - Paths are absolute; images exist locally and are normalized PNG files.
 - Return a Python dictionary, not a JSON string, coroutine, or HTTP response.
 - Raise an exception when conversion fails. Do not return partial output as success.

@@ -94,7 +94,10 @@ def convert_pages(
                     'id': region.id,
                     'type': block_type,
                     'page': page.pageNumber,
-                    'text': region.verbatim if block_type in ('heading', 'paragraph') else '',
+                    'sourceRegion': region.bounds.model_dump(),
+                    # Keep what the model sees on the page beside its normalized
+                    # accessible reading; review needs both when they diverge.
+                    'text': region.verbatim,
                     'latex': (best.latex or region.verbatim) if block_type == 'equation' else '',
                     'description': best.reading if block_type == 'diagram' else '',
                     'spokenText': best.reading,

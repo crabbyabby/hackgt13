@@ -11,7 +11,7 @@ from PIL import Image, ImageOps
 # PDF user space is 72 units per inch, so scale = target DPI / 72.
 PDF_POINTS_PER_INCH = 72
 TARGET_DPI = int(os.getenv("PAGE_RENDER_DPI", "300"))
-MAX_PAGES = int(os.getenv("MAX_PAGES", "10"))
+MAX_PAGES = int(os.getenv("MAX_PAGES", "25"))
 MAX_PIXELS = 40_000_000
 # Ceiling on the long edge so a poster-sized page cannot exhaust memory at 300 DPI.
 MAX_SIDE = 4200
@@ -69,7 +69,9 @@ def prepare_document(source: Path, kind: str, target_dpi: int = TARGET_DPI) -> P
             if pdf.needs_pass:
                 raise ValueError("Password-protected PDFs are not supported.")
             if not 1 <= len(pdf) <= MAX_PAGES:
-                raise ValueError(f"Use a PDF with 1–{MAX_PAGES} pages.")
+                raise ValueError(
+                    f"PDF contains {len(pdf)} pages; the maximum supported is {MAX_PAGES}."
+                )
             for number, page in enumerate(pdf, 1):
                 if page.rect.width <= 0 or page.rect.height <= 0:
                     raise ValueError("PDF has an invalid page size.")

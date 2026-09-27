@@ -1,4 +1,9 @@
-from backend.app.document_processing.mathml import build_expression_tree, compile_math, speak_latex
+from backend.app.document_processing.mathml import (
+    build_expression_tree,
+    compile_math,
+    normalize_flattened_matrices,
+    speak_latex,
+)
 
 
 def test_valid_latex_compiles_to_mathml():
@@ -105,6 +110,27 @@ def test_real_matrix_environments_are_not_flagged():
         assert result.ok is True
         assert "<mtable" in result.mathml
         assert result.structureWarning is None
+
+
+def test_normalizer_preserves_bracketed_augmented_arrays_and_equations():
+    latex = (
+        r"\left[\begin{array}{ccccc|c}3&2&0&1&3&5\\"
+        r"-2&4&-16&2&3&2\\-1&1&-5&3&0&0\\"
+        r"0&1&-3&0&1&1\end{array}\right]"
+        r"\sim"
+        r"\left[\begin{array}{ccccc|c}1&0&2&0&0&1\\"
+        r"0&1&-3&0&0&1\\0&0&0&1&0&0\\"
+        r"0&0&0&0&1&0\end{array}\right]"
+    )
+
+    normalized = normalize_flattened_matrices(latex)
+    result = compile_math(normalized)
+
+    assert normalized == latex
+    assert result.ok is True
+    assert result.mathml is not None
+    assert result.mathml.count("<mtable") == 2
+    assert result.structureWarning is None
 
 
 def test_ordinary_notation_is_not_flagged():

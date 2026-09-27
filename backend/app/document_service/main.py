@@ -11,16 +11,25 @@ from typing import Annotated
 from fastapi import BackgroundTasks, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import BaseModel
 
-from backend.app.document_processing.mathml import compile_math
+from backend.app.document_processing.mathml import (
+    compile_math,
+    detect_flattened_matrix,
+    normalize_flattened_matrices,
+)
 
 from .converter import convert_pages
 from .models import EditDocument, ExtractedDocument, RevisionRequest
 from .pages import prepare_document
 from .storage import Conflict, NotFound, Store, now
 
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+MAX_UPLOAD_BYTES = int(os.environ.get('MAX_UPLOAD_BYTES', str(20 * 1024 * 1024)))
 logger = logging.getLogger('eigenscribe.documents')
+
+
+class MathCompileRequest(BaseModel):
+    latex: str
 
 
 def create_app(data_dir=None, converter=None):
@@ -38,7 +47,9 @@ def create_app(data_dir=None, converter=None):
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[s.strip() for s in os.environ.get(
-            'FRONTEND_ORIGINS', 'http://localhost:5173,http://localhost:3000').split(',') if s.strip()],
+            'FRONTEND_ORIGINS',
+            'http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173,http://127.0.0.1:3000',
+        ).split(',') if s.strip()],
         allow_methods=['GET', 'POST', 'PATCH'], allow_headers=['Content-Type'],
     )
 
@@ -152,9 +163,19 @@ def create_app(data_dir=None, converter=None):
                 perf_counter() - started,
             )
             # Never publish provider exception text: it may contain keys or private inputs.
-            message = {'page preparation': 'Could not read this file. Use a valid PNG/JPEG or an unencrypted PDF of 1–3 pages.',
-                       'conversion': 'Converter failed. Check the converter setup and retry.',
-                       'converter output validation': 'Converter returned invalid document data. Check the shared schema.'}[stage]
+            if stage == 'page preparation':
+                error_text = str(exc)
+                if error_text.startswith('PDF contains '):
+                    message = f'{error_text} Split it into smaller PDFs and upload each part.'
+                elif error_text == 'Password-protected PDFs are not supported.':
+                    message = error_text
+                else:
+                    message = 'Could not read this file. Use a valid PNG/JPEG or PDF.'
+            else:
+                message = {
+                    'conversion': 'Converter failed. Check the converter setup and retry.',
+                    'converter output validation': 'Converter returned invalid document data. Check the shared schema.',
+                }[stage]
             def failed(current):
                 current.update(status='failed', error=message, processingStage='failed')
             store().update(doc_id, failed)
@@ -162,6 +183,18 @@ def create_app(data_dir=None, converter=None):
     @app.get('/health')
     def health():
         return {'status': 'ok'}
+
+    @app.post('/mathml')
+    def compile_mathml(body: MathCompileRequest):
+        warning = detect_flattened_matrix(body.latex)
+        result = compile_math(normalize_flattened_matrices(body.latex))
+        return {
+            'latex': result.latex,
+            'mathml': result.mathml,
+            'mathmlError': result.error,
+            'structureWarning': result.structureWarning or warning,
+            'needsReview': not result.ok or bool(warning or result.structureWarning),
+        }
 
     @app.post('/documents', status_code=202)
     async def upload(
@@ -187,7 +220,7 @@ def create_app(data_dir=None, converter=None):
                 while chunk := await file.read(1024 * 1024):
                     size += len(chunk)
                     if size > MAX_UPLOAD_BYTES:
-                        raise HTTPException(413, 'Maximum upload size is 10 MiB.')
+                        raise HTTPException(413, 'Maximum upload size is 20 MiB.')
                     output.write(chunk)
             with pending.open('rb') as source:
                 signature = source.read(8)
@@ -259,22 +292,28 @@ def create_app(data_dir=None, converter=None):
             semantic = {
                 'id': block['id'],
                 'kind': kind,
-                'text': (
-                    block['spokenText']
-                    if kind in ('heading', 'paragraph')
-                    else block['text'] or block['description'] or block['spokenText']
-                ),
+                'page': block['page'],
+                'sourceRegion': ({'page': block['page'], **block['sourceRegion']}
+                                 if block.get('sourceRegion') else None),
+                # Keep verbatim transcription in the reader. Spoken text belongs to
+                # narration and should not silently replace the words on the page.
+                'text': block['text'] if kind in ('heading', 'paragraph')
+                else block['text'] or block['description'] or block['spokenText'],
                 'confidence': block.get('confidence', 0),
                 'needsReview': block['needsReview'],
+                'reviewReason': block.get('reviewReason', ''),
                 'interpretations': block.get('interpretations', []),
             }
             if kind == 'equation':
                 # Compiling to MathML is both the accessible rendering and an objective
                 # check on the transcription: LaTeX that will not parse cannot be trusted
                 # or published, whatever confidence the model reported.
-                compiled = compile_math(block['latex'])
+                original_latex = block['latex']
+                flattened_warning = detect_flattened_matrix(original_latex)
+                normalized_latex = normalize_flattened_matrices(original_latex)
+                compiled = compile_math(normalized_latex)
                 semantic['math'] = {
-                    'latex': block['latex'],
+                    'latex': compiled.latex,
                     'spoken': block['spokenText'],
                     'label': 'Handwritten equation',
                     'variables': [],
@@ -282,10 +321,14 @@ def create_app(data_dir=None, converter=None):
                     'mathmlError': compiled.error,
                     **({'tree': compiled.tree.model_dump(exclude_none=True)} if compiled.tree else {}),
                 }
-                if compiled.structureWarning:
-                    semantic['math']['structureWarning'] = compiled.structureWarning
-                if not compiled.ok or compiled.structureWarning:
+                structure_warning = compiled.structureWarning or flattened_warning
+                if structure_warning:
+                    semantic['math']['structureWarning'] = structure_warning
+                if not compiled.ok or structure_warning:
                     semantic['needsReview'] = True
+                    reason = structure_warning or compiled.error or 'The equation needs mathematical review.'
+                    existing = semantic.get('reviewReason', '')
+                    semantic['reviewReason'] = f'{existing} {reason}'.strip()
             elif kind == 'diagram':
                 semantic['altText'] = block['description']
             blocks.append(semantic)

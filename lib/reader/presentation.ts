@@ -1,9 +1,10 @@
 import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
+import { associateEquationAnnotations } from "@/lib/reader/annotations";
 
 export type ReaderItem =
   | { type: "heading"; text: string; sourceIndex: number }
   | { type: "prose"; text: string; sourceIndices: number[] }
-  | { type: "math"; block: NoteBlock; label: "Formula" | "Equation" | "Example"; sourceIndex: number }
+  | { type: "math"; block: NoteBlock; label: "Formula" | "Equation" | "Example"; sourceIndex: number; annotations: string[] }
   | { type: "visual"; block: NoteBlock; sourceIndex: number };
 
 function normalized(value: string) {
@@ -65,6 +66,7 @@ export function buildReaderItems(note: SemanticNote): ReaderItem[] {
     (block) => !block.math && normalized(readableText(block)) === normalized(note.title),
   );
   const startIndex = duplicateTitleIndex >= 0 ? duplicateTitleIndex + 1 : 0;
+  const annotations = associateEquationAnnotations(note.blocks);
   const items: ReaderItem[] = [];
   let pendingText: string[] = [];
   let pendingIndices: number[] = [];
@@ -79,6 +81,7 @@ export function buildReaderItems(note: SemanticNote): ReaderItem[] {
 
   note.blocks.forEach((block, sourceIndex) => {
     if (sourceIndex < startIndex) return;
+    if (annotations.consumedIndices.has(sourceIndex)) return;
     const text = readableText(block);
     const nearDocumentEnd = sourceIndex >= note.blocks.length - 2;
     if (nearDocumentEnd && isTailArtifact(text)) return;
@@ -86,7 +89,7 @@ export function buildReaderItems(note: SemanticNote): ReaderItem[] {
     if (block.math) {
       flushProse();
       const label = mathLabel(block, exampleMode);
-      items.push({ type: "math", block, label, sourceIndex });
+      items.push({ type: "math", block, label, sourceIndex, annotations: annotations.byEquationId.get(block.id) ?? [] });
       if (label === "Example") exampleMode = true;
       return;
     }

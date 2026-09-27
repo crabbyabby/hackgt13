@@ -40,6 +40,22 @@ def test_document_workflow_uses_persistence_and_shared_converter(tmp_path):
         assert slug_response.json()["id"] == document_id
 
 
+def test_document_upload_accepts_files_over_one_megabyte(tmp_path):
+    # PNG readers ignore bytes after IEND; padding exercises multipart/upload limits
+    # without making a larger decoded image or changing the fixture content.
+    large_png = _png_bytes() + b"x" * (1200 * 1024)
+    assert len(large_png) > 1024 * 1024
+
+    with TestClient(create_app(data_dir=tmp_path)) as client:
+        upload = client.post(
+            "/documents",
+            files={"file": ("large-notes.png", large_png, "image/png")},
+            data={"provider": "development", "model": "development-fixture"},
+        )
+
+    assert upload.status_code == 202, upload.text
+
+
 def test_published_equations_carry_mathml_and_a_navigable_tree(tmp_path):
     """The development fixture emits a valid equation, so the note must carry MathML."""
     with TestClient(create_app(data_dir=tmp_path)) as client:

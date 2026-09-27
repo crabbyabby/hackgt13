@@ -20,6 +20,9 @@ type PdfModel = {
 };
 
 const fallbackModel: PdfModel = { provider: "development", id: "development-fixture", label: "Development fixture — no API call", description: "Local example output", recommendedFor: "local UI development", available: true };
+// Upload directly to the Python service so an intermediate Worker/proxy body limit
+// cannot reject files before the backend's configured 20 MiB validation runs.
+const PYTHON_BACKEND_URL = process.env.NEXT_PUBLIC_PYTHON_BACKEND_URL ?? "http://127.0.0.1:8000";
 
 export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
@@ -45,25 +48,38 @@ export default function UploadPage() {
   async function analyze() {
     if (!file) return;
     setState("running"); setError(""); setProgress("Uploading source document…");
+    let elapsedTimer: number | undefined;
     const [provider, model] = selection.split(":", 2);
     const form = new FormData(); form.append("file", file); form.append("provider", provider); form.append("model", model);
     try {
-      const uploadResponse = await fetch("/api/documents", { method: "POST", body: form });
-      const accepted = await uploadResponse.json() as { id?: string; error?: string };
+      const uploadResponse = await fetch(`${PYTHON_BACKEND_URL}/documents`, { method: "POST", body: form });
+      const uploadText = await uploadResponse.text();
+      let accepted: { id?: string; error?: string };
+      try {
+        accepted = JSON.parse(uploadText);
+      } catch {
+        throw new Error(uploadText || "The upload service returned an unreadable response.");
+      }
       if (!uploadResponse.ok || !accepted.id) throw new Error(accepted.error ?? "Upload failed");
       console.info(`[EigenScribe] Document accepted: ${accepted.id}`);
-      setProgress(`Document accepted. Waiting for ${model} to inspect the pages…`);
+      const processingStartedAt = Date.now();
+      let currentStage = "queued";
+      const updateProgress = () => {
+        const elapsed = Math.floor((Date.now() - processingStartedAt) / 1000);
+        setProgress(`AI processing: ${currentStage} · ${elapsed}s elapsed…`);
+      };
+      updateProgress();
+      elapsedTimer = window.setInterval(updateProgress, 1000);
 
       for (let attempt = 1; attempt <= 450; attempt += 1) {
         const statusResponse = await fetch(`/api/documents/${encodeURIComponent(accepted.id)}`, { cache: "no-store" });
         const document = await statusResponse.json() as { status?: string; processingStage?: string; error?: string; blocks?: unknown[] };
         if (!statusResponse.ok) throw new Error(document.error ?? "Could not read processing status.");
-        if (attempt === 1 || attempt % 5 === 0) {
-          const elapsed = (attempt - 1) * 2;
-          const stage = document.processingStage?.replaceAll("_", " ") ?? document.status ?? "unknown";
-          console.info(`[EigenScribe] Poll ${attempt}: status=${document.status} stage=${stage} elapsed≈${elapsed}s`);
-          setProgress(`AI processing: ${stage} · ${elapsed}s elapsed…`);
-        }
+        const stage = document.processingStage?.replaceAll("_", " ") ?? document.status ?? "unknown";
+        currentStage = stage.toLowerCase() === "ai conversion" ? "AI conversion" : stage;
+        const elapsed = Math.floor((Date.now() - processingStartedAt) / 1000);
+        if (attempt === 1 || attempt % 5 === 0) console.info(`[EigenScribe] Poll ${attempt}: status=${document.status} stage=${currentStage} elapsed=${elapsed}s`);
+        updateProgress();
         if (document.status === "failed") throw new Error(document.error ?? "Document processing failed.");
         if (document.status === "needs_review" || document.status === "ready") {
           setProgress(`Extraction complete. Preparing ${document.blocks?.length ?? 0} blocks for review…`);
@@ -81,6 +97,8 @@ export default function UploadPage() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "The note could not be analyzed.");
       setState("error");
+    } finally {
+      if (elapsedTimer !== undefined) window.clearInterval(elapsedTimer);
     }
   }
 
@@ -97,7 +115,7 @@ export default function UploadPage() {
           <div className="upload-card">
             <input ref={input} type="file" accept="application/pdf,image/*" className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
             <FileUp size={28} />
-            <div><strong>{file?.name ?? "Choose a PDF or image"}</strong><p>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "PDF, PNG, JPG, or HEIC · maximum 20 MB"}</p></div>
+            <div><strong>{file?.name ?? "Choose a PDF or image"}</strong><p>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "PDF (up to 25 pages), PNG, JPG, or HEIC · maximum 20 MB"}</p></div>
             <Button variant="outline" onClick={() => input.current?.click()}>{file ? "Replace" : "Choose file"}</Button>
           </div>
           <label className="model-picker">PDF handwriting model

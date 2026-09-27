@@ -27,11 +27,13 @@ export function MathFormula({
   label = "Equation",
   selected = false,
   onPlay,
+  annotations = [],
 }: {
   math: MathNode;
   label?: "Formula" | "Equation" | "Example";
   selected?: boolean;
   onPlay?: () => void;
+  annotations?: string[];
 }) {
   const mathml = safeMathml(math.mathml);
 
@@ -56,7 +58,9 @@ export function MathFormula({
           </div>
         )}
       </div>
+      {math.structureWarning && <p className="equation-warning" role="status">Instructor review needed: {math.structureWarning}</p>}
       <p className="sr-only">{math.spoken}</p>
+      {annotations.map((annotation, index) => <p key={`${index}-${annotation}`} className="equation-annotation"><strong>Handwritten annotation:</strong> {annotation}</p>)}
       {onPlay && (
         <button type="button" className="equation-listen" onClick={(event) => { event.stopPropagation(); onPlay(); }}>
           Hear this {label.toLowerCase()}

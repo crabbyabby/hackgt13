@@ -11,11 +11,20 @@ class Interpretation(BaseModel):
     evidence: str = Field(default='', max_length=3000)
 
 
+class SourceRegion(BaseModel):
+    model_config = ConfigDict(extra='forbid', strict=True)
+    x: float = Field(ge=0, le=100)
+    y: float = Field(ge=0, le=100)
+    width: float = Field(gt=0, le=100)
+    height: float = Field(gt=0, le=100)
+
+
 class Block(BaseModel):
     model_config = ConfigDict(extra='forbid', strict=True)
     id: str = Field(min_length=1, max_length=100)
     type: Literal['heading', 'paragraph', 'equation', 'diagram']
     page: int = Field(ge=1)
+    sourceRegion: SourceRegion | None = None
     text: str = Field(default='', max_length=30000)
     latex: str = Field(default='', max_length=30000)
     description: str = Field(default='', max_length=30000)

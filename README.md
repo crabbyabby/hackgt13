@@ -51,8 +51,11 @@ poll reads as well. `MODEL_PROGRESS_INTERVAL_SECONDS` controls the heartbeat.
 
 The Python backend owns source validation, normalized page images, SQLite persistence, the extraction
 pipeline, AI/document-processing boundaries, revisions, publication, narration preparation, and secure
-voice-provider credentials. TypeScript is limited to the browser UI, polling transport, the Grok
-real-time browser session, audio playback, and thin API proxies.
+voice-provider credentials. The browser sends upload bodies directly to the Python API so intermediary
+Worker limits do not reject files; set `NEXT_PUBLIC_PYTHON_BACKEND_URL` to that API's public HTTPS
+origin when the frontend and backend are deployed separately, and add the frontend origin to the
+backend's `FRONTEND_ORIGINS` CORS allowlist. TypeScript handles the browser UI, polling transport,
+the Grok real-time browser session, audio playback, and thin API proxies.
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for service boundaries, data flow, API routes, and the integration backlog.
 
