@@ -19,6 +19,7 @@ class Settings:
     xai_pdf_model: str = os.getenv("XAI_PDF_MODEL", "grok-4.7")
     grok_voice_id: str = os.getenv("GROK_VOICE_ID", "eve")
     grok_formula_voice_id: str = os.getenv("GROK_FORMULA_VOICE_ID", "luna")
+    grok_visual_voice_id: str = os.getenv("GROK_VISUAL_VOICE_ID", "ara")
     grok_voice_model: str = os.getenv("GROK_VOICE_MODEL", "grok-voice-latest")
     grok_voice_language: str = os.getenv("GROK_VOICE_LANGUAGE", "en")
     max_voice_upload_bytes: int = int(os.getenv("MAX_VOICE_UPLOAD_BYTES", str(25 * 1024 * 1024)))

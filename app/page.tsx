@@ -30,7 +30,7 @@ export default function HomePage() {
     <div className="landing-page">
       <header className="landing-header">
         <Link href="/" className="wordmark" aria-label="EigenScribe home">
-          <Image src="/eigenscribe title logo.png" alt="" width={170} height={40} className="wordmark-logo" priority />
+          <Image src="/eigenscribe_new.svg" alt="" width={588} height={143} className="wordmark-logo" priority />
         </Link>
         <nav aria-label="Main navigation">
           <a href="#how-it-works">How it works</a>

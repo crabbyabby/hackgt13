@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import Response
@@ -29,6 +29,7 @@ class NavigationRequest(BaseModel):
 class NarrationRequest(BaseModel):
     note: SemanticNote
     blockIndex: int | None = Field(default=None, ge=0)
+    mode: Literal["formula", "visual"] | None = None
 
 
 @router.get("/config")
@@ -38,6 +39,8 @@ async def voice_config():
         "available": bool(settings.xai_api_key),
         "agentAvailable": bool(settings.xai_api_key),
         "voiceId": settings.grok_voice_id,
+        "formulaVoiceId": settings.grok_formula_voice_id,
+        "visualVoiceId": settings.grok_visual_voice_id,
         "realtimeModel": settings.grok_voice_model,
         "language": settings.grok_voice_language,
     }
@@ -64,6 +67,21 @@ async def create_speech(body: SpeechRequest):
     return Response(content=audio, media_type="audio/mpeg", headers={"Cache-Control": "private, no-store"})
 
 
+@router.get("/onboarding")
+async def reader_onboarding():
+    try:
+        audio = await grok_voice_service.synthesize_reader_onboarding()
+    except VoiceProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except VoiceProviderError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "private, max-age=86400"},
+    )
+
+
 @router.post("/narration")
 async def create_narration(body: NarrationRequest):
     if body.blockIndex is not None and body.blockIndex >= len(body.note.blocks):
@@ -73,6 +91,12 @@ async def create_narration(body: NarrationRequest):
             audio = await grok_voice_service.synthesize_reading(
                 math_narration_service.reading_segments(body.note)
             )
+        elif body.mode == "visual" or body.note.blocks[body.blockIndex].kind in ("graph", "diagram"):
+            block = body.note.blocks[body.blockIndex]
+            description = (block.altText or block.text).strip()
+            if not description:
+                raise HTTPException(status_code=422, detail="This visual has no description to read.")
+            audio = await grok_voice_service.synthesize_visual_description(description)
         else:
             script = await math_narration_service.prepare(body.note, body.blockIndex)
             audio = await grok_voice_service.synthesize(script, voice_id=grok_voice_service.formula_voice_id)
@@ -91,7 +115,13 @@ async def create_narration(body: NarrationRequest):
 async def create_narration_script(body: NarrationRequest):
     if body.blockIndex is not None and body.blockIndex >= len(body.note.blocks):
         raise HTTPException(status_code=422, detail="The requested note block does not exist.")
-    script = await math_narration_service.prepare(body.note, body.blockIndex)
+    if body.blockIndex is not None and (
+        body.mode == "visual" or body.note.blocks[body.blockIndex].kind in ("graph", "diagram")
+    ):
+        block = body.note.blocks[body.blockIndex]
+        script = f"Graph description. {(block.altText or block.text).strip()}"
+    else:
+        script = await math_narration_service.prepare(body.note, body.blockIndex)
     return {"script": script}
 
 

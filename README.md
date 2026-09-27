@@ -73,17 +73,19 @@ Add these values to `.env.local`, then restart both servers:
 ```bash
 XAI_API_KEY=your_key
 GROK_VOICE_ID=eve
+GROK_FORMULA_VOICE_ID=luna
+GROK_VISUAL_VOICE_ID=ara
 GROK_VOICE_MODEL=grok-voice-latest
 GROK_VOICE_LANGUAGE=en
 NARRATION_MODEL=gpt-6-luna
 ```
 
-The full-note and click-to-read modes use Grok text-to-speech when `XAI_API_KEY`
+The full-note and right-click-to-read modes use Grok text-to-speech when `XAI_API_KEY`
 is configured. Set `OPENAI_API_KEY` as well to have the narration LLM rewrite raw notation into an
 explicit spoken script; otherwise the reviewed spoken-math fields are used as a
 deterministic fallback. If Grok is unconfigured or its speech request fails,
 the reader automatically speaks the same math-aware script with the browser's
-default `speechSynthesis` voice. This makes click-to-read formula testing work in
+default `speechSynthesis` voice. This makes right-click formula and graph testing work in
 development mode without an xAI key. Real-time conversation uses the same key:
 the Python API mints a short-lived Grok client secret, and the browser opens
 `wss://api.x.ai/v1/realtime` with that secret so the API key never reaches the browser.

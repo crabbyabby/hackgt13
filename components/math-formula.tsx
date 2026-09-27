@@ -40,7 +40,17 @@ export function MathFormula({
   return (
     <section
       className={`reader-equation ${selected ? "current-equation" : ""}`}
-      onClick={onPlay}
+      tabIndex={onPlay ? 0 : undefined}
+      aria-label={onPlay ? `${label}. Right click or press Shift F10 to hear this card.` : undefined}
+      aria-keyshortcuts={onPlay ? "Shift+F10" : undefined}
+      title={onPlay ? "Right click to hear this card" : undefined}
+      onContextMenu={(event) => { if (onPlay) { event.preventDefault(); onPlay(); } }}
+      onKeyDown={(event) => {
+        if (onPlay && ((event.shiftKey && event.key === "F10") || event.key === "ContextMenu")) {
+          event.preventDefault();
+          onPlay();
+        }
+      }}
     >
       <span className="equation-label">{label}</span>
       <div className="math-scroll">
@@ -63,11 +73,6 @@ export function MathFormula({
       {math.structureWarning && <p className="equation-warning" role="status">Instructor review needed: {math.structureWarning}</p>}
       <p className="sr-only">{math.spoken}</p>
       {annotations.map((annotation, index) => <p key={`${index}-${annotation}`} className="equation-annotation"><strong>Handwritten annotation:</strong> {annotation}</p>)}
-      {onPlay && (
-        <button type="button" className="equation-listen" onClick={(event) => { event.stopPropagation(); onPlay(); }}>
-          Hear this {label.toLowerCase()}
-        </button>
-      )}
     </section>
   );
 }

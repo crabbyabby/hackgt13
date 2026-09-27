@@ -7,13 +7,16 @@ import type { SemanticNote } from "@/lib/domain/note";
 import { useGrokConversation } from "@/lib/voice/grok-realtime";
 import { DownloadHtmlButton } from "@/components/download-html-button";
 
-export type FormulaReadRequest = { index: number; token: number } | null;
+export type CardReadRequest = { index: number; kind: "formula" | "visual"; token: number } | null;
 
 type ReaderControlsProps = {
   note: SemanticNote;
-  formulaRequest: FormulaReadRequest;
-  onFormulaReadHandled: () => void;
+  cardRequest: CardReadRequest;
+  onCardReadHandled: () => void;
 };
+
+const READER_INTRO_KEY = "eigenscribe.reader-context-menu-intro.v1";
+const READER_INTRO_MESSAGE = "Right click on any card to hear it!";
 
 function documentContext(note: SemanticNote) {
   return note.blocks.map((block, index) => {
@@ -44,9 +47,9 @@ function browserFullNarration(note: SemanticNote) {
   return parts.join("\n\n[pause]\n\n");
 }
 
-function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: ReaderControlsProps) {
+function ReaderControlsInner({ note, cardRequest, onCardReadHandled }: ReaderControlsProps) {
   const [speaking, setSpeaking] = useState(false);
-  const [loadingNarration, setLoadingNarration] = useState<"full" | "formula" | null>(null);
+  const [loadingNarration, setLoadingNarration] = useState<"full" | "formula" | "visual" | null>(null);
   const [agentStarting, setAgentStarting] = useState(false);
   const [collapsed, setCollapsed] = useState(true);
   const [message, setMessage] = useState("Choose a listening mode.");
@@ -70,12 +73,53 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
   }, []);
 
   useEffect(() => {
-    if (!formulaRequest) return;
-    void generateNarration(formulaRequest.index);
-    onFormulaReadHandled();
-    // The token represents a deliberate formula click; callbacks are intentionally excluded.
+    if (!cardRequest) return;
+    acknowledgeCardRequest(cardRequest.index, cardRequest.kind);
+    onCardReadHandled();
+    // The token represents a deliberate card context-click; callbacks are intentionally excluded.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formulaRequest?.token]);
+  }, [cardRequest?.token]);
+
+  function acknowledgeCardRequest(index: number, kind: "formula" | "visual") {
+    if (!("speechSynthesis" in window)) {
+      void generateNarration(index, kind);
+      return;
+    }
+    browserSpeechRunRef.current += 1;
+    window.speechSynthesis.cancel();
+    setMessage("Just a second…");
+    const acknowledgment = new SpeechSynthesisUtterance("Just a second");
+    acknowledgment.rate = 1.04;
+    let continued = false;
+    const continueToCard = () => {
+      if (continued) return;
+      continued = true;
+      void generateNarration(index, kind);
+    };
+    acknowledgment.onend = continueToCard;
+    acknowledgment.onerror = continueToCard;
+    browserPauseRef.current = window.setTimeout(continueToCard, 1400);
+    window.speechSynthesis.speak(acknowledgment);
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (window.localStorage.getItem(READER_INTRO_KEY)) return;
+      window.localStorage.setItem(READER_INTRO_KEY, "played");
+      void (async () => {
+        try {
+          const response = await fetch("/api/voice/onboarding", { cache: "no-store" });
+          if (!response.ok) throw new Error("Grok onboarding is unavailable.");
+          await playAudio(await response.blob(), "Right-click listening is ready.");
+        } catch {
+          try { speakWithBrowser(READER_INTRO_MESSAGE, "onboarding"); } catch { /* No speech output is available. */ }
+        }
+      })();
+    }, 250);
+    return () => window.clearTimeout(timer);
+    // This welcome is deliberately checked once per browser, not once per render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function stopNarration(updateMessage = true) {
     audioRef.current?.pause();
@@ -90,7 +134,7 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     if (updateMessage) setMessage("Narration stopped.");
   }
 
-  function speakWithBrowser(script: string, mode: "full" | "formula") {
+  function speakWithBrowser(script: string, mode: "full" | "formula" | "visual" | "onboarding") {
     if (!("speechSynthesis" in window)) {
       throw new Error("Neither Grok voice nor browser speech is available.");
     }
@@ -108,6 +152,11 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
       }
       const utterance = new SpeechSynthesisUtterance(chunks[position]);
       utterance.rate = mode === "formula" ? 0.78 : 0.9;
+      const voices = window.speechSynthesis.getVoices();
+      if (voices.length) {
+        const voiceIndex = mode === "formula" ? 1 : mode === "visual" ? 2 : 0;
+        utterance.voice = voices[Math.min(voiceIndex, voices.length - 1)];
+      }
       utterance.onend = () => {
         position += 1;
         browserPauseRef.current = window.setTimeout(speakNext, mode === "formula" ? 450 : 280);
@@ -125,11 +174,28 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     speakNext();
   }
 
-  async function generateNarration(blockIndex?: number) {
+  async function playAudio(blob: Blob, playingMessage: string) {
     stopNarration(false);
-    const mode = blockIndex === undefined ? "full" : "formula";
+    const audioUrl = URL.createObjectURL(blob);
+    audioUrlRef.current = audioUrl;
+    const audio = new Audio(audioUrl);
+    audioRef.current = audio;
+    audio.onended = () => {
+      setSpeaking(false);
+      setMessage("Narration finished.");
+      URL.revokeObjectURL(audioUrl);
+      audioUrlRef.current = null;
+    };
+    await audio.play();
+    setSpeaking(true);
+    setMessage(playingMessage);
+  }
+
+  async function generateNarration(blockIndex?: number, cardKind: "formula" | "visual" = "formula") {
+    stopNarration(false);
+    const mode = blockIndex === undefined ? "full" : cardKind;
     setLoadingNarration(mode);
-    setMessage(mode === "full" ? "Writing the full math narration…" : "Preparing this formula for speech…");
+    setMessage(mode === "full" ? "Writing the full math narration…" : mode === "visual" ? "Preparing this graph description…" : "Preparing this formula for speech…");
     try {
       if (mode === "full") {
         setMessage("Loading the cached multi-voice reading…");
@@ -146,63 +212,40 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
           runFullBrowserFallback();
           return;
         }
-        const audioUrl = URL.createObjectURL(await narrationResponse.blob());
-        audioUrlRef.current = audioUrl;
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-        audio.onended = () => {
-          setSpeaking(false);
-          setMessage("Narration finished.");
-          URL.revokeObjectURL(audioUrl);
-          audioUrlRef.current = null;
-        };
-        audio.onerror = runFullBrowserFallback;
-        await audio.play();
-        setSpeaking(true);
-        setMessage("Reading notes in the notes voice and mathematics in the formula voice.");
+        try {
+          await playAudio(await narrationResponse.blob(), "Reading notes in the notes voice and mathematics in the formula voice.");
+          if (audioRef.current) audioRef.current.onerror = runFullBrowserFallback;
+        } catch {
+          runFullBrowserFallback();
+        }
         return;
       }
-      const scriptResponse = await fetch("/api/voice/narration-script", {
+      const narrationResponse = await fetch("/api/voice/narration", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ note, blockIndex }),
+        body: JSON.stringify({ note, blockIndex, mode }),
       });
-      const scriptPayload = await scriptResponse.json() as { script?: string; error?: string };
-      if (!scriptResponse.ok || !scriptPayload.script) {
-        throw new Error(scriptPayload.error ?? "Narration script generation failed.");
+      if (narrationResponse.ok) {
+        await playAudio(
+          await narrationResponse.blob(),
+          mode === "visual" ? "Describing this graph in the visual-description voice." : "Reading the selected formula.",
+        );
+        return;
       }
-      setMessage("Generating Grok voice…");
-      let fallbackStarted = false;
-      const runBrowserFallback = () => {
-        if (fallbackStarted) return;
-        fallbackStarted = true;
-        stopNarration(false);
-        speakWithBrowser(scriptPayload.script!, mode);
-      };
-      try {
-        const speechResponse = await fetch("/api/voice/speech", {
+      let fallbackScript = mode === "visual"
+        ? `Graph description. ${note.blocks[blockIndex!]?.altText ?? note.blocks[blockIndex!]?.text ?? ""}`
+        : "";
+      if (mode === "formula") {
+        const scriptResponse = await fetch("/api/voice/narration-script", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: scriptPayload.script }),
+          body: JSON.stringify({ note, blockIndex, mode }),
         });
-        if (!speechResponse.ok) throw new Error("Grok voice is unavailable.");
-        const audioUrl = URL.createObjectURL(await speechResponse.blob());
-        audioUrlRef.current = audioUrl;
-        const audio = new Audio(audioUrl);
-        audioRef.current = audio;
-        audio.onended = () => {
-          setSpeaking(false);
-          setMessage("Narration finished.");
-          URL.revokeObjectURL(audioUrl);
-          audioUrlRef.current = null;
-        };
-        audio.onerror = runBrowserFallback;
-        await audio.play();
-        setSpeaking(true);
-        setMessage(mode === "full" ? "Reading the full notes." : "Reading the selected formula.");
-      } catch {
-        runBrowserFallback();
+        const scriptPayload = await scriptResponse.json() as { script?: string; error?: string };
+        fallbackScript = scriptPayload.script ?? "";
       }
+      if (!fallbackScript) throw new Error("Narration generation failed.");
+      speakWithBrowser(fallbackScript, mode);
     } catch (reason) {
       setMessage(reason instanceof Error ? reason.message : "Narration generation failed.");
     } finally {
@@ -266,8 +309,9 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
 
       <section className="voice-mode">
         <span className="mode-number">2</span>
-        <div><h2>Read one formula</h2><p>Click any yellow math card. The math LLM adds explicit operators, grouping, powers, and pauses; development mode uses your browser voice.</p></div>
+        <div><h2>Read one card</h2><p>Right click a yellow math card to hear the formula, or a green graph card to hear its visual description in a third voice.</p></div>
         {loadingNarration === "formula" && <span className="inline-loading"><AudioLines className="spin" /> Preparing formula…</span>}
+        {loadingNarration === "visual" && <span className="inline-loading"><AudioLines className="spin" /> Preparing graph description…</span>}
       </section>
 
       <section className="voice-mode">

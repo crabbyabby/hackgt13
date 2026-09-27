@@ -13,7 +13,7 @@ export function AppShell({ children, step }: { children: ReactNode; step?: "uplo
     <div className="app-shell">
       <header className="site-header">
         <Link href="/" className="wordmark" aria-label="EigenScribe home">
-          <Image src="/eigenscribe title logo.png" alt="" width={153} height={36} className="wordmark-logo" priority />
+          <Image src="/eigenscribe_new.svg" alt="" width={588} height={143} className="wordmark-logo" priority />
         </Link>
         <nav aria-label="Workflow">
           {steps.map(([id, label]) => <span key={id} className={step === id ? "active-step" : ""}>{label}</span>)}

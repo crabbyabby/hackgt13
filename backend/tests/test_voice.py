@@ -163,3 +163,44 @@ async def test_full_reading_uses_two_voices_then_reuses_composite_cache(tmp_path
 
     assert first == second == b"audio-eveaudio-luna"
     assert [request["voice_id"] for request in requests] == ["eve", "luna"]
+
+
+async def test_graph_and_reader_intro_use_distinct_persistent_voice_cache(tmp_path):
+    requests: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        requests.append(body)
+        return httpx.Response(200, content=f"audio-{body['voice_id']}".encode())
+
+    cache_dir = tmp_path / "voice-cache"
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        service = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            formula_voice_id="luna",
+            visual_voice_id="ara",
+            language="en",
+            realtime_model="grok-voice-latest",
+            client=client,
+            cache_dir=cache_dir,
+        )
+        graph_audio = await service.synthesize_visual_description("A parabola opens upward.")
+        intro_audio = await service.synthesize_reader_onboarding()
+
+        restarted = GrokVoiceService(
+            api_key="test-xai-key",
+            voice_id="eve",
+            formula_voice_id="luna",
+            visual_voice_id="ara",
+            language="en",
+            realtime_model="grok-voice-latest",
+            client=client,
+            cache_dir=cache_dir,
+        )
+        assert await restarted.synthesize_visual_description("A parabola opens upward.") == graph_audio
+        assert await restarted.synthesize_reader_onboarding() == intro_audio
+
+    assert graph_audio == b"audio-ara"
+    assert intro_audio == b"audio-eve"
+    assert [request["voice_id"] for request in requests] == ["ara", "eve"]

@@ -31,6 +31,7 @@ class VoiceProviderUnavailable(VoiceProviderError):
 
 TTS_CHAR_LIMIT = 14_000
 GROK_PAUSE = "[pause]"
+READER_ONBOARDING_MESSAGE = "Right click on any card to hear it!"
 
 
 class PersistentVoiceCache:
@@ -93,12 +94,14 @@ class GrokVoiceService:
         language: str,
         realtime_model: str,
         formula_voice_id: str = "luna",
+        visual_voice_id: str = "ara",
         client: httpx.AsyncClient | None = None,
         cache_dir: str | Path | None = None,
     ) -> None:
         self.api_key = api_key
         self.voice_id = voice_id
         self.formula_voice_id = formula_voice_id
+        self.visual_voice_id = visual_voice_id
         self.language = language
         self.realtime_model = realtime_model
         self.client = client
@@ -130,6 +133,17 @@ class GrokVoiceService:
                 )
                 return cached
             return await self._synthesize_uncached(text, cache_key, selected_voice)
+
+    async def synthesize_visual_description(self, alt_text: str) -> bytes:
+        """Read a graph description in a voice distinct from prose and mathematics."""
+        return await self.synthesize(
+            f"Graph description. {alt_text.strip()}",
+            voice_id=self.visual_voice_id,
+        )
+
+    async def synthesize_reader_onboarding(self) -> bytes:
+        """Return the fixed, persistently cached reader interaction prompt."""
+        return await self.synthesize(READER_ONBOARDING_MESSAGE, voice_id=self.voice_id)
 
     async def _synthesize_uncached(self, text: str, cache_key: str, voice_id: str) -> bytes:
         api_key = self._require_key()
