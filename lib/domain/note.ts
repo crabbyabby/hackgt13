@@ -32,6 +32,7 @@ export type MathNode = {
 export type NoteBlock = {
   id: string;
   kind: BlockKind;
+  page?: number;
   title?: string;
   text: string;
   math?: MathNode;
@@ -39,6 +40,7 @@ export type NoteBlock = {
   sourceRegion?: { page: number; x: number; y: number; width: number; height: number };
   confidence: number;
   needsReview: boolean;
+  reviewReason?: string;
   interpretations?: Array<{ reading: string; latex?: string; confidence: number; evidence: string }>;
 };
 

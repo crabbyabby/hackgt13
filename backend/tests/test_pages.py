@@ -80,6 +80,13 @@ def test_password_protected_pdfs_are_rejected(tmp_path):
         prepare_document(source, "pdf")
 
 
+def test_pdf_page_limit_error_reports_actual_page_count(tmp_path):
+    source = _write_pdf(tmp_path, [f"Page {number}" for number in range(11)])
+
+    with pytest.raises(ValueError, match=r"PDF contains 11 pages; the maximum supported is 10"):
+        prepare_document(source, "pdf")
+
+
 def test_legacy_prepare_pages_still_returns_paths(tmp_path):
     source = _write_pdf(tmp_path, ["one", "two"])
 

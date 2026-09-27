@@ -1,87 +1,23 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FileUp } from "lucide-react";
+import { ArrowRight, BookOpenText, FileText, UploadCloud } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { AppShell } from "@/components/app-shell";
-import { PipelineList } from "@/components/pipeline-list";
-import { saveDraft } from "@/lib/domain/storage";
 import { createDemoNote } from "@/lib/demo-note";
-import type { ExtractionResult } from "@/lib/domain/note";
+import { saveDraft } from "@/lib/domain/storage";
+import { setPendingUpload } from "@/lib/domain/upload-draft";
 
-type PdfModel = {
-  provider: "openai" | "google" | "xai" | "development";
-  id: string;
-  label: string;
-  description: string;
-  recommendedFor: string;
-  available: boolean;
-};
-
-const fallbackModel: PdfModel = { provider: "development", id: "development-fixture", label: "Development fixture — no API call", description: "Local example output", recommendedFor: "local UI development", available: true };
-
-export default function UploadPage() {
-  const [file, setFile] = useState<File | null>(null);
-  const [state, setState] = useState<"idle" | "running" | "error">("idle");
-  const [error, setError] = useState("");
-  const [progress, setProgress] = useState("");
-  const [models, setModels] = useState<PdfModel[]>([fallbackModel]);
-  const [selection, setSelection] = useState("development:development-fixture");
-  const input = useRef<HTMLInputElement>(null);
+export default function HomePage() {
   const router = useRouter();
+  const input = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
 
-  useEffect(() => {
-    fetch("/api/pdf-models")
-      .then((response) => response.ok ? response.json() as Promise<PdfModel[]> : Promise.reject())
-      .then((options) => {
-        setModels(options);
-        const firstAvailable = options.find((option) => option.available && option.provider !== "development") ?? options.find((option) => option.available) ?? fallbackModel;
-        setSelection(`${firstAvailable.provider}:${firstAvailable.id}`);
-      })
-      .catch(() => setModels([fallbackModel]));
-  }, []);
-
-  async function analyze() {
+  function chooseFile(file?: File) {
     if (!file) return;
-    setState("running"); setError(""); setProgress("Uploading source document…");
-    const [provider, model] = selection.split(":", 2);
-    const form = new FormData(); form.append("file", file); form.append("provider", provider); form.append("model", model);
-    try {
-      const uploadResponse = await fetch("/api/documents", { method: "POST", body: form });
-      const accepted = await uploadResponse.json() as { id?: string; error?: string };
-      if (!uploadResponse.ok || !accepted.id) throw new Error(accepted.error ?? "Upload failed");
-      console.info(`[EigenScribe] Document accepted: ${accepted.id}`);
-      setProgress(`Document accepted. Waiting for ${model} to inspect the pages…`);
-
-      for (let attempt = 1; attempt <= 450; attempt += 1) {
-        const statusResponse = await fetch(`/api/documents/${encodeURIComponent(accepted.id)}`, { cache: "no-store" });
-        const document = await statusResponse.json() as { status?: string; processingStage?: string; error?: string; blocks?: unknown[] };
-        if (!statusResponse.ok) throw new Error(document.error ?? "Could not read processing status.");
-        if (attempt === 1 || attempt % 5 === 0) {
-          const elapsed = (attempt - 1) * 2;
-          const stage = document.processingStage?.replaceAll("_", " ") ?? document.status ?? "unknown";
-          console.info(`[EigenScribe] Poll ${attempt}: status=${document.status} stage=${stage} elapsed≈${elapsed}s`);
-          setProgress(`AI processing: ${stage} · ${elapsed}s elapsed…`);
-        }
-        if (document.status === "failed") throw new Error(document.error ?? "Document processing failed.");
-        if (document.status === "needs_review" || document.status === "ready") {
-          setProgress(`Extraction complete. Preparing ${document.blocks?.length ?? 0} blocks for review…`);
-          const noteResponse = await fetch(`/api/documents/${encodeURIComponent(accepted.id)}/semantic-note`, { cache: "no-store" });
-          const notePayload = await noteResponse.json() as ExtractionResult["note"] | { error: string };
-          if (!noteResponse.ok || "error" in notePayload) throw new Error("error" in notePayload ? notePayload.error : "Could not compile the semantic note.");
-          console.info(`[EigenScribe] Processing complete: ${notePayload.blocks.length} semantic blocks`);
-          saveDraft(notePayload);
-          router.push("/review");
-          return;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-      }
-      throw new Error(`Processing exceeded 15 minutes. Document ${accepted.id} can be resumed from the backend.`);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "The note could not be analyzed.");
-      setState("error");
-    }
+    setPendingUpload(file);
+    router.push("/upload");
   }
 
   function openSampleNote() {
@@ -90,32 +26,62 @@ export default function UploadPage() {
   }
 
   return (
-    <AppShell step="upload">
-      <main className="page-grid">
-        <section className="primary-panel">
-          <div className="page-heading"><p className="overline">New note</p><h1>Upload course notes</h1><p>Start with a PDF or image. The extraction pipeline produces one semantic document for review, publishing, speech, navigation, and download.</p></div>
-          <div className="upload-card">
-            <input ref={input} type="file" accept="application/pdf,image/*" className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
-            <FileUp size={28} />
-            <div><strong>{file?.name ?? "Choose a PDF or image"}</strong><p>{file ? `${Math.max(1, Math.round(file.size / 1024))} KB selected` : "PDF, PNG, JPG, or HEIC · maximum 20 MB"}</p></div>
-            <Button variant="outline" onClick={() => input.current?.click()}>{file ? "Replace" : "Choose file"}</Button>
+    <div className="landing-page">
+      <header className="landing-header">
+        <Link href="/" className="wordmark" aria-label="EigenScribe home">
+          <span className="landing-brand-icon"><BookOpenText size={19} aria-hidden="true" /></span>
+          EigenScribe
+        </Link>
+        <nav aria-label="Main navigation">
+          <a href="#how-it-works">How it works</a>
+          <Link href="/upload" className="landing-nav-cta">Open workspace <ArrowRight size={15} aria-hidden="true" /></Link>
+        </nav>
+      </header>
+
+      <main>
+        <section className="landing-hero" aria-labelledby="hero-title">
+          <div className="landing-copy">
+            <p className="landing-eyebrow"><span /> Accessible learning, starting with your notes</p>
+            <h1 id="hero-title">Your handwritten notes,<br />made <span>clear for everyone.</span></h1>
+            <p className="landing-description">Turn lecture notes, equations, and diagrams into structured, accessible course materials that are easier to read, navigate, and hear.</p>
+            <div className="landing-benefits" aria-label="What EigenScribe does">
+              <span><FileText size={17} aria-hidden="true" /> Keeps the original pages</span>
+              <span><BookOpenText size={17} aria-hidden="true" /> Structures text and math</span>
+            </div>
           </div>
-          <label className="model-picker">PDF handwriting model
-            <select value={selection} onChange={(event) => setSelection(event.target.value)}>
-              {(["openai", "google", "xai", "development"] as const).map((provider) => {
-                const providerModels = models.filter((option) => option.provider === provider);
-                if (!providerModels.length) return null;
-                return <optgroup key={provider} label={provider === "google" ? "Google Gemini" : provider === "xai" ? "xAI Grok" : provider === "openai" ? "OpenAI" : "Local development"}>{providerModels.map((option) => <option key={`${option.provider}:${option.id}`} value={`${option.provider}:${option.id}`} disabled={!option.available}>{option.label}{option.available ? "" : " — API key required"}</option>)}</optgroup>;
-              })}
-            </select>
-            <small>{models.find((option) => `${option.provider}:${option.id}` === selection)?.description}</small>
-          </label>
-          {error && <p className="error-message" role="alert">{error}</p>}
-          {state === "running" && <p className="processing-message" aria-live="polite">{progress}</p>}
-          <div className="action-row"><Button size="lg" disabled={!file || state === "running"} onClick={analyze}>{state === "running" ? "Analyzing…" : "Analyze notes"}</Button><Button size="lg" variant="ghost" onClick={openSampleNote}>Open Gram-Schmidt sample</Button></div>
+
+          <section className="landing-upload-card" aria-labelledby="upload-card-title">
+            <div className="landing-card-heading">
+              <div className="landing-card-icon"><UploadCloud size={21} aria-hidden="true" /></div>
+              <div><h2 id="upload-card-title">Make your notes accessible</h2><p>Start with a PDF or image of your notes.</p></div>
+            </div>
+            <input ref={input} type="file" accept="application/pdf,image/png,image/jpeg,image/heic,image/heif" className="sr-only" aria-label="Choose notes PDF or image" onChange={(event) => chooseFile(event.target.files?.[0])} />
+            <div
+              className={`landing-dropzone${dragging ? " is-dragging" : ""}`}
+              onDragOver={(event) => { event.preventDefault(); setDragging(true); }}
+              onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDragging(false); }}
+              onDrop={(event) => { event.preventDefault(); setDragging(false); chooseFile(event.dataTransfer.files?.[0]); }}
+            >
+              <span className="landing-upload-symbol"><UploadCloud size={25} aria-hidden="true" /></span>
+              <strong>Drag and drop your notes here</strong>
+              <span className="landing-file-types">PDF or image · up to 20 MB · PDFs up to 25 pages</span>
+              <Button size="lg" onClick={() => input.current?.click()}><FileText size={17} aria-hidden="true" /> Choose a file</Button>
+              <Button size="lg" variant="ghost" onClick={openSampleNote}>Open Gram-Schmidt sample</Button>
+              <span className="landing-upload-hint">Your file opens in the upload workspace before analysis.</span>
+            </div>
+          </section>
         </section>
-        <aside className="secondary-panel"><h2>Extraction pipeline</h2><p>Each stage has its own contract and can be replaced independently.</p><PipelineList running={state === "running"} /></aside>
+
+        <section className="landing-how" id="how-it-works" aria-labelledby="how-title">
+          <div><p className="overline">From page to understanding</p><h2 id="how-title">A clearer way to work with notes</h2></div>
+          <div className="landing-steps">
+            <article><span>01</span><h3>Upload</h3><p>Add a scan or photo of handwritten notes.</p></article>
+            <article><span>02</span><h3>Review</h3><p>Check the structured text, equations, and descriptions.</p></article>
+            <article><span>03</span><h3>Read your way</h3><p>Use an accessible document with math and narration support.</p></article>
+          </div>
+        </section>
       </main>
-    </AppShell>
+      <footer className="landing-footer"><span>EigenScribe</span><span>Make knowledge easier to access.</span></footer>
+    </div>
   );
 }

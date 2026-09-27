@@ -18,6 +18,12 @@ export default function ReaderPage() {
   useEffect(() => {
     let active = true;
     const draft = loadDraft();
+    if (draft?.slug === slug && draft.status === "published") {
+      // The reviewer’s latest edits live in this browser draft until persistence is
+      // connected. Do not let an older backend extraction overwrite the export source.
+      setNote(draft);
+      return () => { active = false; };
+    }
     const draftTimer = window.setTimeout(() => {
       if (active && draft?.slug === slug) setNote(draft);
     }, 0);
@@ -46,6 +52,7 @@ export default function ReaderPage() {
               key={item.block.id}
               math={item.block.math!}
               label={item.label}
+              annotations={item.annotations}
               selected={selected}
               onPlay={() => { setIndex(item.sourceIndex); setFormulaRequest({ index: item.sourceIndex, token: Date.now() }); }}
             />;

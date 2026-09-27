@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AudioLines, Download, Headphones, Mic, Minimize2, PhoneOff, Square } from "lucide-react";
+import { AudioLines, Headphones, Mic, Minimize2, PhoneOff, Square } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { NoteBlock, SemanticNote } from "@/lib/domain/note";
+import type { SemanticNote } from "@/lib/domain/note";
 import { useGrokConversation } from "@/lib/voice/grok-realtime";
+import { DownloadHtmlButton } from "@/components/download-html-button";
 
 export type FormulaReadRequest = { index: number; token: number } | null;
 
@@ -230,28 +231,6 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
     }
   }
 
-  function download() {
-    // Note content is author text, not markup: escaping keeps a stray "<" or "&" from
-    // producing an invalid document (WCAG 2.1 SC 4.1.1) or injecting markup.
-    const escape = (value: string) => value.replace(/[&<>"']/g, (character) =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[character] as string));
-    // Equations ship as MathML so the downloaded file is readable by assistive technology
-    // on its own. Unverified notation degrades to labelled source rather than silent LaTeX.
-    const formula = (math: NonNullable<NoteBlock["math"]>) =>
-      math.mathml && math.mathml.trim().startsWith("<math")
-        ? `<figure>${math.mathml}<figcaption class="sr-only">${escape(math.spoken)}</figcaption></figure>`
-        : `<p><code>${escape(math.latex)}</code> <em>(unverified notation: ${escape(math.spoken)})</em></p>`;
-    const body = note.blocks.map((block) => `<section><h2>${escape(block.title ?? block.kind)}</h2><p>${escape(block.text)}</p>${block.math ? formula(block.math) : ""}${block.altText ? `<p><strong>Visual description:</strong> ${escape(block.altText)}</p>` : ""}</section>`).join("");
-    const blob = new Blob([`<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escape(note.title)}</title><style>.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}</style></head><body><main><h1>${escape(note.title)}</h1>${body}</main></body></html>`], { type: "text/html" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${note.slug}.html`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setMessage("Downloaded accessible HTML.");
-  }
-
   const connected = conversation.status === "connected";
   const conversationLabel = connected
     ? (conversation.isSpeaking ? "Agent is speaking" : "Agent is listening")
@@ -260,6 +239,8 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
   if (collapsed) {
     return (
       <aside className="reader-controls reader-controls-collapsed" aria-label="Listening controls">
+        <DownloadHtmlButton note={note} />
+        <DownloadHtmlButton note={note} includeOriginalPages={false} />
         <Button onClick={() => setCollapsed(false)} aria-expanded="false">
           <Headphones /> Listen &amp; interact
           {connected && <span className="live-dot" aria-label="Voice conversation connected" />}
@@ -303,7 +284,8 @@ function ReaderControlsInner({ note, formulaRequest, onFormulaReadHandled }: Rea
       </section>
 
       <p className="reader-status" aria-live="polite">{message}</p>
-      <Button variant="ghost" onClick={download}><Download /> Download HTML</Button>
+      <DownloadHtmlButton note={note} />
+      <DownloadHtmlButton note={note} includeOriginalPages={false} />
     </aside>
   );
 }

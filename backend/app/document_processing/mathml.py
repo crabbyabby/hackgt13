@@ -70,6 +70,7 @@ _MATRIX_ENVIRONMENT = re.compile(r"\\begin\{(p|b|B|v|V|small)?matrix\*?\}|\\begi
 # more row separators, e.g. "[3; -2; -1; 0]" and "[3 2 0 1 3 | 5; ...]". One semicolon
 # inside brackets is ordinary notation such as an ordered pair, so it is left alone.
 _FLATTENED_MATRIX = re.compile(r"[\[(](?:[^\[\]()]*\|[^\[\]()]*|[^\[\]()]*;[^\[\]()]*;[^\[\]()]*)[\])]", re.DOTALL)
+_BRACKETED_LIST = re.compile(r"\[[^\[\]]+\]")
 
 
 def compile_math(latex: str) -> MathCompilation:
@@ -110,6 +111,56 @@ def detect_flattened_matrix(latex: str) -> str | None:
             "It should use a matrix environment so rows and columns survive."
         )
     return None
+
+
+def normalize_flattened_matrices(latex: str) -> str:
+    """Recover structure from OCR-style bracketed lists with explicit row separators.
+
+    The source transcription is retained separately, and the semantic note flags every
+    recovered matrix for instructor review.
+    """
+    source = latex or ""
+    # Brackets around a genuine LaTeX matrix (notably ``\left[\begin{array}…``)
+    # must never be mistaken for a flattened OCR list. Rewriting those brackets nests
+    # another ``\left[`` inside the existing delimiters and leaves MathML compilation
+    # with an unmatched ``\right``. The explicit environment already preserves rows.
+    if _MATRIX_ENVIRONMENT.search(source):
+        return source
+
+    def convert(match: re.Match[str]) -> str:
+        body = match.group(0)[1:-1].strip()
+        rows = [row.strip().replace(",", " ") for row in body.split(";")]
+        if len(rows) < 2 and "|" not in body:
+            return match.group(0)
+
+        parsed: list[tuple[list[str], list[str]]] = []
+        for row in rows:
+            if "|" in row:
+                left, right = row.split("|", 1)
+                parsed.append((left.split(), right.split()))
+            else:
+                parsed.append((row.split(), []))
+        if not parsed or any(not left and not right for left, right in parsed):
+            return match.group(0)
+
+        augmented = any(right for _, right in parsed)
+        if augmented:
+            left_widths = {len(left) for left, _ in parsed}
+            right_widths = {len(right) for _, right in parsed}
+            if len(left_widths) != 1 or len(right_widths) != 1 or 0 in right_widths:
+                return match.group(0)
+            left_width, right_width = next(iter(left_widths)), next(iter(right_widths))
+            spec = "c" * left_width + "|" + "c" * right_width
+            matrix_rows = ["&".join(left + right) for left, right in parsed]
+            return r"\left[\begin{array}{" + spec + "}" + r"\\".join(matrix_rows) + r"\end{array}\right]"
+
+        widths = {len(left) for left, _ in parsed}
+        if len(widths) != 1 or 0 in widths:
+            return match.group(0)
+        matrix_rows = ["&".join(left) for left, _ in parsed]
+        return r"\begin{bmatrix}" + r"\\".join(matrix_rows) + r"\end{bmatrix}"
+
+    return _BRACKETED_LIST.sub(convert, source)
 
 
 def speak_latex(latex: str) -> str:

@@ -150,9 +150,9 @@ def create_app(data_dir=None, converter=None):
                 perf_counter() - started,
             )
             # Never publish provider exception text: it may contain keys or private inputs.
-            message = {'page preparation': 'Could not read this file. Use a valid PNG/JPEG or an unencrypted PDF of 1–3 pages.',
-                       'conversion': 'Converter failed. Check the converter setup and retry.',
-                       'converter output validation': 'Converter returned invalid document data. Check the shared schema.'}[stage]
+            message = {'Page Preparation': 'Could not read this file. Use a valid PNG/JPEG or an unencrypted PDF of 1–3 pages.',
+                       'Conversion': 'Converter failed. Check the converter setup and retry.',
+                       'Converter output validation': 'Converter returned invalid document data. Check the shared schema.'}[stage]
             def failed(current):
                 current.update(status='failed', error=message, processingStage='failed')
             store().update(doc_id, failed)
