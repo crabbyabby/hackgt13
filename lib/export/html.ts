@@ -8,8 +8,12 @@ type CompiledMath = { latex: string; mathml: string | null; mathmlError: string 
 
 function formula(math: NonNullable<NoteBlock["math"]>) {
   return math.mathml && math.mathml.trim().startsWith("<math")
-    ? `<figure>${math.mathml}<figcaption class="sr-only">${escape(math.spoken)}</figcaption></figure>`
-    : `<p><code>${escape(math.latex)}</code> <em>(unverified notation: ${escape(math.spoken)})</em></p>`;
+    ? `<figure class="math-figure">${math.mathml}</figure>`
+    : `<div class="math-fallback" role="img" aria-label="${escape(math.spoken)}"><span>${escape(math.spoken)}</span><small>Math rendering needs instructor review.</small></div>`;
+}
+
+function normalizedHeading(value: string) {
+  return value.toLocaleLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 }
 
 function relationSymbol(block: NoteBlock) {
@@ -78,9 +82,16 @@ export async function downloadStandaloneHtml(
       ? `<figure class="source-page"><img src="${images[pageIndex]}" alt="Page ${page}: ${escape(alt)}"><figcaption><strong>Original handwritten page ${page}</strong></figcaption></figure>`
       : "";
     const contentItems: string[] = [];
+    const emittedText = new Set<string>();
     for (let index = 0; index < blocks.length; index += 1) {
       const block = blocks[index];
       if (associatedAnnotations.consumedIndices.has(index)) continue;
+      const blockHeading = block.title ?? block.text;
+      if (block.kind === "heading" || block.kind === "paragraph") {
+        const visibleText = normalizedHeading(block.kind === "heading" ? blockHeading : block.text);
+        if (visibleText && (visibleText === normalizedHeading(note.title) || emittedText.has(visibleText))) continue;
+        if (visibleText) emittedText.add(visibleText);
+      }
       const relation = blocks[index + 1];
       const right = blocks[index + 2];
       const relationLatex = relation && relationSymbol(relation);
@@ -102,7 +113,7 @@ export async function downloadStandaloneHtml(
           ...(associatedAnnotations.byEquationId.get(block.id) ?? []),
           ...(associatedAnnotations.byEquationId.get(right.id) ?? []),
         ];
-        contentItems.push(`<section class="content-block"><div class="equation"><div class="equation-line" role="group" aria-label="${escape(`${block.math.spoken} ${spokenRelation} ${right.math.spoken}`)}">${formula(leftMath)}<span class="relation-operator" aria-hidden="true">${relationLatex}</span>${formula(rightMath)}</div>${annotationHtml(pairAnnotations)}</div></section>`);
+        contentItems.push(`<section class="content-block"><div class="equation"><div class="equation-line">${formula(leftMath)}<span class="relation-operator" aria-hidden="true">${relationLatex}</span>${formula(rightMath)}</div>${annotationHtml(pairAnnotations)}</div></section>`);
         index += 2;
         continue;
       }
@@ -112,8 +123,12 @@ export async function downloadStandaloneHtml(
           mathmlError: compiled.mathmlError ?? block.math.mathmlError,
           structureWarning: compiled.structureWarning ?? block.math.structureWarning }
         : block.math;
-      const context = displayMath && block.text && block.text !== block.math?.spoken
-        ? `<p>${escape(block.text)}</p>` : (!displayMath && block.text ? `<p>${escape(block.text)}</p>` : "");
+      // Equation blocks retain the OCR/verbatim source in `text` for instructor review.
+      // The accessible MathML is the rendered version of that same content, so printing
+      // both makes every equation appear twice. Heading content is likewise emitted only
+      // as a heading below, never again as a paragraph.
+      const context = !displayMath && block.kind !== "heading" && block.text
+        ? `<p>${escape(block.text)}</p>` : "";
       const heading = block.kind === "heading" ? `<h4>${escape(block.title ?? block.text)}</h4>` : "";
       const equation = displayMath ? `<div class="equation">${formula(displayMath)}</div>` : "";
       const visual = block.altText ? `<figure><figcaption>Visual description</figcaption><p>${escape(block.altText)}</p></figure>` : "";
@@ -122,7 +137,7 @@ export async function downloadStandaloneHtml(
     const content = contentItems.join("\n");
     return `<section class="page"><h3>Page ${page}</h3>${image}<div class="page-content">${content}</div></section>${page < pageCount ? '<hr class="page-break">' : ""}`;
   }).join("\n");
-  const styles = `:root{color-scheme:light}body{max-width:960px;margin:0 auto;padding:2rem 1.5rem;color:#172b3d;font:18px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}h1{font-size:2.25rem;line-height:1.2}h3{margin:0 0 1rem;color:#245a80;font-size:1.55rem}.source-page{margin:1rem 0 2rem}.source-page img{display:block;max-width:100%;height:auto;margin:auto;border:1px solid #ccd8e1}.source-page figcaption{margin-top:.5rem;text-align:center;color:#526474}.page-content{display:grid;gap:1rem}.content-block{min-width:0}.content-block p{margin:.3rem 0}.content-block h4{margin:.6rem 0;font-size:1.25rem}.equation{overflow-x:auto;text-align:center;padding:1rem 0}.equation math{display:block;font-size:1.2em;overflow-x:auto}.equation-line{display:flex;align-items:center;justify-content:center;gap:1.1rem;min-width:max-content}.equation-line figure{margin:0}.equation-line math{display:block}.relation-operator{font-size:1.5em}.equation-annotation{max-width:70rem;margin:.2rem auto 0;color:#5e6e7d;font-size:.78rem;line-height:1.45;text-align:left}.page-break{margin:40px 0;border:0;border-top:2px solid #3498db}.source-unavailable{padding:1rem;background:#f4f7f9}@media print{body{max-width:none;padding:0}.page{break-inside:avoid}.page-break{break-after:page}}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}`;
+  const styles = `:root{color-scheme:light}body{max-width:960px;margin:0 auto;padding:2rem 1.5rem;color:#172b3d;font:18px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}h1{font-size:2.25rem;line-height:1.2}h3{margin:0 0 1rem;color:#245a80;font-size:1.55rem}.source-page{margin:1rem 0 2rem}.source-page img{display:block;max-width:100%;height:auto;margin:auto;border:1px solid #ccd8e1}.source-page figcaption{margin-top:.5rem;text-align:center;color:#526474}.page-content{display:grid;gap:1rem}.content-block{min-width:0}.content-block p{margin:.3rem 0}.content-block h4{margin:.6rem 0;font-size:1.25rem}.equation{overflow-x:auto;text-align:center;padding:1rem 0}.equation math{display:block;max-width:100%;margin:auto;font-size:1.2em;overflow-x:auto}.math-figure{margin:0}.equation-line{display:flex;align-items:center;justify-content:center;gap:1.1rem;min-width:max-content}.equation-line figure{margin:0}.equation-line math{display:block}.relation-operator{font-size:1.5em}.math-fallback{display:grid;justify-items:center;gap:.3rem;padding:.75rem 1rem;border:1px solid #bcd9ec;border-radius:.5rem;background:#f4faff}.math-fallback>span{font-family:Georgia,"Times New Roman",serif;font-size:1.05em}.math-fallback small{color:#806018;font: .75rem/1.4 system-ui,sans-serif}.equation-annotation{max-width:70rem;margin:.2rem auto 0;color:#5e6e7d;font-size:.78rem;line-height:1.45;text-align:left}.page-break{margin:40px 0;border:0;border-top:2px solid #3498db}.source-unavailable{padding:1rem;background:#f4f7f9}@media print{body{max-width:none;padding:0}.page{break-inside:avoid}.page-break{break-after:page}}`;
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(note.title)}</title><style>${styles}</style></head><body><main><header><h1>${escape(note.title)}</h1><p>Accessible transcription of ${escape(note.source.name)}.</p></header>${pageHtml}</main></body></html>`;
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
   const url = URL.createObjectURL(blob);
